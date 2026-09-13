@@ -227,6 +227,73 @@
           "nullable": true
         }
       },
+      "AssessmentListItem": {
+        "type": "object",
+        "additionalProperties": {
+          "nullable": true
+        }
+      },
+      "AssessmentCounts": {
+        "type": "object",
+        "properties": {
+          "in_progress": {
+            "type": "number"
+          },
+          "intake_complete": {
+            "type": "number"
+          },
+          "awaiting_decision": {
+            "type": "number"
+          },
+          "escalated": {
+            "type": "number"
+          },
+          "closed": {
+            "type": "number"
+          },
+          "error_review": {
+            "type": "number"
+          },
+          "pending": {
+            "type": "number"
+          },
+          "all": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "in_progress",
+          "intake_complete",
+          "awaiting_decision",
+          "escalated",
+          "closed",
+          "error_review",
+          "pending",
+          "all"
+        ]
+      },
+      "Department": {
+        "type": "object",
+        "properties": {
+          "_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "personaIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "_id",
+          "name",
+          "personaIds"
+        ]
+      },
       "Assessment": {
         "type": "object",
         "additionalProperties": {
@@ -21193,7 +21260,34 @@
           },
           {
             "schema": {
-              "type": "string"
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "required": false,
+            "name": "pending",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "monitor_only",
+                "risk",
+                "elevated_risk",
+                "issue"
+              ]
+            },
+            "required": false,
+            "name": "classification",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{1,63}$"
             },
             "required": false,
             "name": "personaKey",
@@ -21201,7 +21295,17 @@
           },
           {
             "schema": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{1,63}$"
+            },
+            "required": false,
+            "name": "scenarioKey",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f\\d]{24}$"
             },
             "required": false,
             "name": "departmentId",
@@ -21227,10 +21331,24 @@
           },
           {
             "schema": {
+              "type": "string",
+              "enum": [
+                "pending_first",
+                "newest",
+                "oldest"
+              ],
+              "default": "pending_first"
+            },
+            "required": false,
+            "name": "sort",
+            "in": "query"
+          },
+          {
+            "schema": {
               "type": "integer",
               "minimum": 1,
               "maximum": 200,
-              "default": 50
+              "default": 25
             },
             "required": false,
             "name": "limit",
@@ -21249,7 +21367,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Own / department assessments",
+            "description": "Review dashboard (DASH-01): scoped, filtered, paginated; counts per status within the non-status filters",
             "content": {
               "application/json": {
                 "schema": {
@@ -21261,7 +21379,7 @@
                         "items": {
                           "type": "array",
                           "items": {
-                            "$ref": "#/components/schemas/Assessment"
+                            "$ref": "#/components/schemas/AssessmentListItem"
                           }
                         },
                         "total": {
@@ -21272,14 +21390,67 @@
                         },
                         "limit": {
                           "type": "number"
+                        },
+                        "pages": {
+                          "type": "number"
+                        },
+                        "counts": {
+                          "$ref": "#/components/schemas/AssessmentCounts"
                         }
                       },
                       "required": [
                         "items",
                         "total",
                         "page",
-                        "limit"
+                        "limit",
+                        "pages",
+                        "counts"
                       ]
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/departments": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The caller's tenant departments (filter lookup; FR-10)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Department"
+                      }
                     },
                     "meta": {
                       "type": "object",

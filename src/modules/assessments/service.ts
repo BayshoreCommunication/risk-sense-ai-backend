@@ -1,5 +1,4 @@
-import { Types } from 'mongoose';
-import type { z } from 'zod';
+import { Types, type PipelineStage } from 'mongoose';
 import { AppError, notFound } from '../../lib/errors';
 import type { AuthTenant, AuthUser } from '../../middleware/auth';
 import { getAi } from '../ai/service';
@@ -11,8 +10,8 @@ import { conditionText, type Facts } from '../shared/conditions';
 import { CLASSIFICATIONS, type Classification } from '../shared/enums';
 import { applyBranch, initialQueue, missingRequired, nextQuestion, structuredValue, type FlowNode, type QuestionLite } from './branching';
 import { activePersonas, activeScenarios, contentTenantId, pinVersions, questionMap, scenarioByKey } from './content';
-import { AssessmentMessageModel, AssessmentModel } from './model';
-import type { DecisionBody, ListQuery, MessageBody, StartBody } from './schema';
+import { ASSESSMENT_STATUSES, AssessmentMessageModel, AssessmentModel, type AssessmentStatus } from './model';
+import { PENDING_STATUSES, type DecisionBody, type ListQuery, type MessageBody, type StartBody } from './schema';
 
 const LOW_CONFIDENCE = 0.7; // FR-06: flag, never drop
 const PERSONA_MIN_CONFIDENCE = 0.6; // FR-04
@@ -393,23 +392,92 @@ export const assessmentsService = {
     return AssessmentMessageModel.find({ assessmentId: doc._id }).sort({ createdAt: 1, _id: 1 }).lean();
   },
 
-  /** DASH-01/DASH-04: requestors see their own; PAID review dashboards add their departments. */
-  async list(user: AuthUser, tenant: AuthTenant, q: z.infer<typeof ListQuery>) {
-    const filter: Record<string, unknown> = { tenantId: user.tenantId };
+  /**
+   * DASH-01/DASH-04 review dashboard. Scope: requestors see their own assessments; on PAID tenants with
+   * `reviewDashboard` they also see their departments' (or everything with `crossDepartmentAccess`);
+   * administrators / system administrators / auditors see the whole tenant. Filters: status or `pending`,
+   * classification, persona, scenario, department, date range. `pending_first` sorting is done in the
+   * database so it survives pagination. `counts` (per status, within the non-status filters) feed the tabs.
+   */
+  async list(user: AuthUser, tenant: AuthTenant, q: ListQuery) {
+    const scope: Record<string, unknown> = { tenantId: new Types.ObjectId(user.tenantId) };
     if (user.role === 'requestor') {
-      if (tenant.features.reviewDashboard && (user.departmentIds.length || user.crossDepartmentAccess)) {
-        filter.$or = [{ requestorId: user.id }, ...(user.crossDepartmentAccess ? [{}] : [{ departmentId: { $in: user.departmentIds } }])];
-      } else filter.requestorId = user.id;
+      const own = { requestorId: new Types.ObjectId(user.id) };
+      if (tenant.features.reviewDashboard && user.crossDepartmentAccess) {
+        // whole tenant
+      } else if (tenant.features.reviewDashboard && user.departmentIds.length) {
+        scope.$or = [own, { departmentId: { $in: user.departmentIds.map((d) => new Types.ObjectId(d)) } }];
+      } else Object.assign(scope, own);
     }
+    // Everything except the status dimension — the tab counts are computed on this.
+    const base: Record<string, unknown> = { ...scope };
+    if (q.classification) base['result.classification'] = q.classification;
+    if (q.personaKey) base.personaKey = q.personaKey;
+    if (q.scenarioKey) base.scenarioKey = q.scenarioKey;
+    if (q.departmentId) base.departmentId = new Types.ObjectId(q.departmentId);
+    if (q.from || q.to) base.createdAt = { ...(q.from ? { $gte: q.from } : {}), ...(q.to ? { $lte: q.to } : {}) };
+    const filter: Record<string, unknown> = { ...base };
     if (q.status) filter.status = q.status;
-    if (q.personaKey) filter.personaKey = q.personaKey;
-    if (q.departmentId) filter.departmentId = q.departmentId;
-    if (q.from || q.to) filter.createdAt = { ...(q.from ? { $gte: q.from } : {}), ...(q.to ? { $lte: q.to } : {}) };
-    const [items, total] = await Promise.all([
-      AssessmentModel.find(filter).sort({ createdAt: -1 }).skip((q.page - 1) * q.limit).limit(q.limit).select('-answers -facts -queue -askedQuestionKeys').lean(),
+    else if (q.pending) filter.status = { $in: PENDING_STATUSES };
+
+    const order: Record<string, 1 | -1> = q.sort === 'oldest' ? { createdAt: 1, _id: 1 } : { createdAt: -1, _id: -1 };
+    const pipeline: PipelineStage[] = [
+      { $match: filter },
+      ...(q.sort === 'pending_first' ? [{ $addFields: { _pending: { $cond: [{ $in: ['$status', PENDING_STATUSES] }, 0, 1] } } }] : []),
+      { $sort: q.sort === 'pending_first' ? { _pending: 1, ...order } : order },
+      { $skip: (q.page - 1) * q.limit },
+      { $limit: q.limit },
+      { $lookup: { from: 'users', localField: 'requestorId', foreignField: '_id', as: 'requestor' } },
+      { $lookup: { from: 'departments', localField: 'departmentId', foreignField: '_id', as: 'department' } },
+      { $unwind: { path: '$requestor', preserveNullAndEmptyArrays: true } },
+      { $unwind: { path: '$department', preserveNullAndEmptyArrays: true } },
+      {
+        // List rows carry what the dashboard shows (class, confidence, explanation, action — FR-21) and nothing
+        // heavier: no answers/facts/queue, no factor breakdown, no other user fields (PII stays minimal).
+        $project: {
+          status: 1,
+          phase: 1,
+          personaKey: 1,
+          scenarioKey: 1,
+          sector: 1,
+          requestorId: 1,
+          departmentId: 1,
+          createdAt: 1,
+          timing: 1,
+          'result.score': 1,
+          'result.classification': 1,
+          'result.confidence': 1,
+          'result.ruleDriven': 1,
+          'result.professionalConsult': 1,
+          'result.mandatoryReview': 1,
+          'result.recommendedAction': 1,
+          'result.explanation': 1,
+          'result.computedAt': 1,
+          'decision.type': 1,
+          'decision.overriddenTo': 1,
+          'decision.decidedAt': 1,
+          'requestor.name': 1,
+          'requestor.email': 1,
+          'department.name': 1,
+        },
+      },
+    ];
+    const [items, total, grouped] = await Promise.all([
+      AssessmentModel.aggregate(pipeline),
       AssessmentModel.countDocuments(filter),
+      AssessmentModel.aggregate<{ _id: string; n: number }>([{ $match: base }, { $group: { _id: '$status', n: { $sum: 1 } } }]),
     ]);
-    return { items, total, page: q.page, limit: q.limit };
+    const byStatus = Object.fromEntries(ASSESSMENT_STATUSES.map((s) => [s, 0])) as Record<AssessmentStatus, number>;
+    for (const g of grouped) byStatus[g._id as AssessmentStatus] = g.n;
+    const counts = { ...byStatus, pending: PENDING_STATUSES.reduce((n, s) => n + byStatus[s], 0), all: grouped.reduce((n, g) => n + g.n, 0) };
+    return {
+      items: items.map((it) => ({ ...it, result: it.result?.computedAt ? it.result : null, decision: it.decision?.type ? it.decision : null })),
+      total,
+      page: q.page,
+      limit: q.limit,
+      pages: Math.max(1, Math.ceil(total / q.limit)),
+      counts,
+    };
   },
 
   async view(doc: Doc) {

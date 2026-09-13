@@ -100,6 +100,8 @@ const assessmentSchema = new Schema(
 );
 assessmentSchema.index({ tenantId: 1, status: 1, departmentId: 1, createdAt: -1 }); // DASH-01
 assessmentSchema.index({ tenantId: 1, requestorId: 1, createdAt: -1 });
+assessmentSchema.index({ tenantId: 1, personaKey: 1, createdAt: -1 }); // DASH-01 persona filter
+assessmentSchema.index({ tenantId: 1, 'result.classification': 1, createdAt: -1 }); // DASH-01 classification filter
 
 assessmentSchema.pre('validate', function (next) {
   if (this.status === 'closed' && !(this.decision && this.decision.type && this.decision.byUserId)) {

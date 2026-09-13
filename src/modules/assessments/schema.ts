@@ -35,14 +35,27 @@ export const DecisionBody = z
   });
 export type DecisionBody = z.infer<typeof DecisionBody>;
 
+/** Statuses that still need a human to act (DASH-01 "pending"). */
+export const PENDING_STATUSES = ['awaiting_decision', 'escalated', 'error_review'] as const;
+export const LIST_SORTS = ['pending_first', 'newest', 'oldest'] as const;
+
+/** GET /assessments — DASH-01 filters (persona, department, date) + status/classification/scenario, paginated. */
 export const ListQuery = z.object({
   status: z.enum(ASSESSMENT_STATUSES).optional(),
-  personaKey: z.string().optional(),
-  departmentId: z.string().optional(),
+  pending: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'), // shortcut for status ∈ PENDING_STATUSES
+  classification: z.enum(CLASSIFICATIONS).optional(),
+  personaKey: z.string().regex(KEY_REGEX).optional(),
+  scenarioKey: z.string().regex(KEY_REGEX).optional(),
+  departmentId: z.string().regex(/^[a-f\d]{24}$/i).optional(),
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
-  limit: z.coerce.number().int().min(1).max(200).default(50),
+  sort: z.enum(LIST_SORTS).default('pending_first'),
+  limit: z.coerce.number().int().min(1).max(200).default(25),
   page: z.coerce.number().int().min(1).default(1),
 });
+export type ListQuery = z.infer<typeof ListQuery>;
 
 export const IdParams = z.object({ id: z.string().min(1) });

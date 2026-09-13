@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import type { z } from 'zod';
 import { ok } from '../../lib/http';
 import { authenticate } from '../../middleware/auth';
 import { requireRole } from '../../middleware/rbac';
@@ -20,7 +19,7 @@ assessmentsRouter.post('/', REQUESTOR, validate({ body: StartBody }), async (req
 });
 
 assessmentsRouter.get('/', READERS, validate({ query: ListQuery }), async (req, res) => {
-  ok(res, await assessmentsService.list(req.user!, req.tenant!, req.query as unknown as z.infer<typeof ListQuery>));
+  ok(res, await assessmentsService.list(req.user!, req.tenant!, req.query as unknown as ListQuery));
 });
 
 assessmentsRouter.get('/:id', READERS, validate({ params: IdParams }), async (req, res) => {

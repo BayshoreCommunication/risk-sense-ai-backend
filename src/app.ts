@@ -17,6 +17,7 @@ import { questionsRouter } from './modules/questions/routes';
 import { rulesRouter } from './modules/rules/routes';
 import { matricesRouter, scoringRouter } from './modules/scoring/routes';
 import { scenariosRouter } from './modules/scenarios/routes';
+import { departmentsRouter } from './modules/tenants/routes';
 import { usersRouter } from './modules/users/routes';
 
 export function createApp() {
@@ -65,6 +66,7 @@ export function createApp() {
   api.use('/scoring-matrices', matricesRouter);
   api.use('/scoring', scoringRouter);
   api.use('/assessments', assessmentsRouter);
+  api.use('/departments', departmentsRouter);
   app.use('/api/v1', api);
 
   app.use(notFoundHandler);
