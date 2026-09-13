@@ -1,0 +1,192 @@
+RISKSENSE AI — PROJECT STATUS AND HANDOVER
+==========================================
+Last updated: 2026-09-13 (end of day 1 of development)
+Owner: Travis (Bayshore Communication). Client documents: Bayshore BRD v1.0 + TAC Solutions Requirements Draft v1.
+Give this file to any AI assistant or developer: it explains what exists, how it was built, why, and what is next.
+Deeper detail lives in docs/ai/*.md (architecture, database, API, business rules, decision log) and docs/dev-notes/*.md (one note per task, file by file).
+
+
+1. WHAT THE PRODUCT IS
+----------------------
+RiskSense AI is a conversational risk-assessment platform. An employee ("requestor") describes an incident
+to a chatbot. The system identifies the employee's persona (job role), picks a matching scenario, asks guided
+questions (MCQ / yes-no / number / free text), turns answers into structured facts, then a deterministic
+engine applies hard rules and a scoring matrix to produce a 0–100 score, a classification
+(monitor_only | risk | elevated_risk | issue), a confidence %, a plain-language explanation and a
+recommended action. A human must accept / override / escalate; the AI never decides or scores.
+
+Two product tiers: FREE (self-signup, MFA, intake, minimal retention/audit) and PAID (SSO, review dashboard,
+full audit, reports, department routing, own "Corp. Instance"). Tier is a tenant setting, not a code fork.
+
+Roles (exactly one per user): requestor, administrator (TAC content team), system_administrator (Bayshore), audit (read-only).
+
+
+2. STACK AND ENVIRONMENT
+------------------------
+Frontend : risk-sense-ai            Next.js 15 (App Router, TypeScript), Tailwind 4, shadcn/ui. Deploy target Vercel.
+Backend  : risk-sense-ai-backend    Express 5 (CommonJS, TypeScript), Mongoose 8, Zod, pino. Deploy target Render (always-on).
+Database : MongoDB Atlas, db "risksense_dev" (dev). Tests use mongodb-memory-server (Homebrew mongod binary locally).
+Auth     : Firebase Authentication FREE TIER for the first factor (email+password, Google). Second factor = our own
+           email OTP (6 digits, 10 min, hash stored). Backend verifies Firebase ID tokens with firebase-admin.
+           Dev bypass: header "X-Dev-User: <seeded email>" when AUTH_DEV_BYPASS=true (never in production).
+AI       : OpenAI API (Structured Outputs, model gpt-4.1-mini) ONLY for: persona inference, scenario selection,
+           free-text fact extraction, explanation prose. Deterministic mock (AI_PROVIDER=mock) for tests/dev.
+Email    : lib/mailer.ts — console (dev: OTP shown on login page) | resend | smtp. Resend key exists; domain not verified yet.
+Git      : GitHub org BayshoreCommunication, repos risk-sense-ai and risk-sense-ai-backend. Work on branch "akib",
+           merge akib -> main (main deploys). CI = GitHub Actions on both repos (lint, typecheck, test, openapi freshness, build).
+Workspace: ~/Desktop/RiskSenseAi (this folder) is a third local-only git repo holding docs/, tasks/, scripts/.
+           The two app folders inside it are the separate app repos.
+
+Local run:
+  cd risk-sense-ai-backend && cp .env.example .env && npm install && npm run seed && npm run seed:content && npm run dev   # :4000
+  cd risk-sense-ai && cp .env.example .env.local && npm install && npm run gen:api && npm run dev                          # :3000
+  Open http://localhost:3000/login -> "Development sign-in" -> click a seeded account (no OTP in dev bypass).
+Seeded accounts: requestor@dev.local, admin@dev.local, admin2@dev.local (second admin for approvals),
+  sysadmin@dev.local, audit@dev.local, requestor@paid.local, itlead@paid.local.
+
+
+3. REPOSITORY LAYOUT
+--------------------
+RiskSenseAi/
+  PROJECT_STATUS.txt            <- this file
+  README.md, AGENTS.md (assistant working rules for the workspace)
+  docs/ai/                      Overview, Architecture, Database, API, BusinessRules (every rule with its FR/NFR/SEC/AI/DASH id),
+                                Workflows, DecisionLog (22 dated decisions), Modules, Services, Patterns, Dependencies,
+                                DevelopmentGuide, TestingGuide, DeploymentGuide, Troubleshooting, KnownIssues, CommonMistakes,
+                                Glossary, PromptGuide, AI_MEMORY (current state), project-map.yaml (machine-readable map)
+  docs/agents/                  domain.md (3-minute briefing), issue-tracker.md (ISS-001..016), clarification-agenda.md (for TAC/Bayshore)
+  docs/content/TEMPLATE_GUIDE.md  how TAC fills the content workbook
+  docs/dev-notes/               dated "what / where / why" notes — READ THESE to understand each step
+  docs/requirements/            original BRD + Requirements docx (English) and Bangla translations
+  docs/planning/                kickoff plan (Bangla)
+  tasks/backlog.md              phases 0–9 as T-xxx tasks with requirement ids and estimates; tasks/sprint-0.md
+  scripts/start-all.sh
+  risk-sense-ai/                FRONTEND repo
+  risk-sense-ai-backend/        BACKEND repo
+
+Backend (risk-sense-ai-backend/src):
+  config/env.ts                 Zod-validated env; fails fast; production refuses dev bypass / console mail
+  lib/                          db, logger, errors (error-code vocabulary), hash (sha256 + canonical JSON), firebase (lazy admin),
+                                openai (structured() helper), mailer, versioned (copy-on-write versioning helper), http (envelope)
+  middleware/                   auth (Firebase token or dev header; FREE self-signup provisioning), session (15-min idle,
+                                1 session/account), rbac (role + MFA gate + PAID feature gate), validate (Zod), error
+  modules/
+    health, auth (sessions + otp), users, tenants (tenant + departments)
+    audit                       append-only, hash-chained log; no update/delete anywhere; GET /audit-logs, /verify
+    personas, scenarios, questions   content library (string keys; personas/scenarios versioned copy-on-write)
+    datasets                    xlsx/json upload -> validation -> approval by a second admin -> activation
+    rules                       hard rules engine + change control (draft->approved->active)
+    scoring                     matrices (versioned + approval), compute.ts (pure scoring), simulate endpoint, golden set
+    ai                          prompts.ts (v1), schemas.ts, service.ts (openaiAi | mockAi)
+    assessments                 model (schema invariants), branching.ts (pure flow), content.ts, service.ts (start/answer/submit/decide), routes
+    shared                      enums, conditions.ts (shared condition language for rules + scoring)
+  scripts/                      seed, seed-content, build-templates, openapi, verify-audit
+  templates/                    risksense-content-template.xlsx, sample-content.json, starter-content.json
+  tests/setup.ts                in-memory mongod, forces mock AI + console mail
+
+Frontend (risk-sense-ai):
+  middleware.ts                 cookie-based role guard (UX only; backend enforces RBAC)
+  lib/session.ts, lib/api/client.ts (openapi-fetch, types generated from backend openapi.json), lib/firebase/client.ts,
+  lib/admin/content.ts, lib/assessments.ts
+  app/(public)/login            first factor + OTP step + dev bypass
+  app/(requestor)/chat, chat/[id], review
+  app/(admin)/admin/{personas,scenarios,questions,datasets,rules,scoring}
+  app/(system)/system, app/(audit)/audit   placeholders
+  components/admin/ContentManager.tsx (generic CRUD table+dialog), components/chat/{ChatSession,ResultCard}.tsx
+
+
+4. WHAT HAS BEEN BUILT, IN ORDER (with the "how")
+------------------------------------------------
+Sprint 0 — foundation (done)
+  * Translated both client documents to Bangla; wrote kickoff plan; created the docs/ knowledge base.
+  * Scaffolded both apps. Backend: env validation, request ids, envelope {data|error, meta.requestId}, error codes.
+  * Auth: Firebase token verification; unknown identities auto-provision as FREE requestors in the "public" tenant;
+    pre-invited accounts (seeded with "dev:" uid) get linked on first login. Our own app sessions enforce the
+    15-minute idle timeout and one session per account (Firebase does not do this). Admin roles require MFA.
+  * MFA decision (Travis): strict two factors on the free tier = Firebase password/Google + our email OTP
+    (POST /auth/otp/request, then POST /auth/session {otpCode}). Rate limits, lockout after 5 wrong codes.
+  * Audit log: per-tenant sequence + SHA-256 hash chain (prevHash). Model refuses updates/deletes. Nightly/ad-hoc verify.
+  * Content templates for TAC (xlsx with 4 sheets: personas, scenarios, questions, scoring), CI workflows, clarification agenda.
+  * Git initialised, akib pushed, CI green. No AI-tool references are committed to the app repos (owner rule).
+
+Phase 2 — administrator content (done except T-028 department mapping and richer editors)
+  * lib/versioned.ts: draft (editable in place) -> active (never mutated; editing creates the next draft version)
+    -> deactivated (kept forever because assessments pin versions). One "current" per version group.
+  * Personas, scenarios, questions reference each other by stable string keys (not ObjectIds). Scenario activation
+    validates: persona active, every flow question (and branch follow-ups) exists and is active, every required fact
+    is produced by a reachable question; then pins a questionSetHash.
+  * Datasets: upload xlsx/json -> parse (template columns, ";" lists, "Label=value" options, yes/no coercion)
+    -> Zod + cross-reference validation (file OR existing content) -> stored as validated/rejected with row-level errors
+    -> approval by a DIFFERENT administrator -> activation applies through the normal services (so versioning and
+    audit apply) including the scoring sheet (matrix "default" + hard rules "sheet_*").
+  * Starter content built from the BRD question sets because TAC has not delivered yet:
+    3 personas (Finance Officer, IT Support/Cybersecurity, Healthcare Compliance), 13 scenarios, 64 questions,
+    scoring sheet. Loaded into Atlas via npm run seed:content. A test guards that it always validates and activates.
+  * Rules: shared condition language ({factKey, op, value} | {all|any}); engine picks the lowest priority, ties -> most
+    severe; change control draft -> approved (other admin) -> active; edits go back to draft.
+  * Scoring: six factors (controlEffectiveness, impact, severity, likelihood, duration, regulatorySensitivity), each
+    weight + scale + mappings (first matching condition -> value, else scale min); score = sum(weight * normalized value);
+    contiguous thresholds; confidence = 70% required-fact coverage + 30% mean extraction confidence; < 60 ->
+    Professional Consult; score exactly 0 -> error review. POST /scoring/simulate runs the same functions; golden set
+    (src/modules/scoring/golden/starter.json) runs in CI.
+  * Admin screens for all of the above (generic ContentManager; nested fields edited as JSON for now) + live simulator.
+
+Phase 3 — chat engine (done, verified in the browser with the real OpenAI model)
+  * Start: persona given or inferred (confidence >= 0.6, else the user picks from candidates; can override).
+    Scenario selected from the persona's library (>= 0.5, else the persona's default scenario). Versions pinned.
+  * Turns: MCQ / yes-no / number answers are structured immediately (no model call). Free text goes to the extractor;
+    the asked fact is "settled" only if extracted, type-coercible and confidence >= 0.5, otherwise one clarification
+    is asked and then the value is kept but flagged. Branch follow-ups are inserted at the front of the queue when the
+    trigger value matches. Missing required facts get one re-ask. Then status intake_complete.
+  * Submit: rules -> scoring -> explanation (model writes prose from computed numbers; never re-derives the class)
+    -> recommended action -> awaiting_decision (or error_review). Decision: accept/override(reason >= 25 chars + new
+    class)/escalate; only this path can close; the Mongoose schema hook rejects closed-without-decision.
+  * Content resolution: a tenant without its own personas uses the public library.
+  * Incident fixed during real-model verification: the extractor returned "unknown" side facts for every key and
+    overwrote clicked answers -> now side facts only fill gaps, need >= 0.7 confidence, no placeholders (regression test).
+  * Frontend: /chat start, /chat/[id] conversation with typed widgets, result card with the three decisions, /review list.
+
+Test count: backend 97 (vitest + supertest + in-memory mongod). Frontend: typecheck + lint (no unit tests yet).
+
+
+5. KEY DECISIONS (see docs/ai/DecisionLog.md for the full reasoning)
+--------------------------------------------------------------------
+01 MERN, two repos            02 Firebase free tier        03 OpenAI structured outputs      04 one frontend, role route groups
+05 Vercel + Render + Atlas    06 Zod -> OpenAPI -> types   07 tenant-aware schema            08 hash-chained audit
+09 copy-on-write versioning   10 rule tie-break            11 defaults for 7 open items      12 dev auth bypass
+13 audit without transactions 14 FREE self-signup          15 strict MFA via email OTP        16 string keys for content
+17 questions edited in place  18 one condition language    19 confidence formula             20 public content fallback
+21 no SSE (one JSON round-trip per turn)                   22 side facts fill gaps only
+
+
+6. CONVENTIONS EVERY CONTRIBUTOR MUST FOLLOW
+--------------------------------------------
+* Requirement ids (FR-xx, NFR-xx, SEC-xx, AI-xx, DASH-xx) in commits, tests and docs. Rules text: docs/ai/BusinessRules.md.
+* Never put scoring/classification logic in the AI layer. The model extracts and explains only.
+* Never add update/delete paths for auditLogs. Never set assessment status "closed" outside assessments.service.decide().
+* Never edit an active persona/scenario/matrix in place — use the versioned helper.
+* Every request-path query is tenant-scoped. PAID features are gated by tenant.features.*.
+* Frontend talks to the API only through lib/api/client.ts with generated types (npm run gen:api after npm run openapi).
+* All repo content in English. No secrets in git (.env.example only). Do not push unless the owner asks; branch akib.
+* After every task: update docs/ai (API/Database/BusinessRules/project-map), DecisionLog if a choice was made,
+  and write docs/dev-notes/YYYY-MM-DD-<task>.md explaining file by file what/where/why.
+
+
+7. OPEN ITEMS AND KNOWN GAPS
+----------------------------
+Waiting on TAC / Bayshore: answers to the 7 open items (manager review, accuracy definition, retention, HIPAA mapping,
+  uptime, DR/session defaults, latency); real persona/scenario/question content and scoring numbers (our starter
+  content is a stand-in); duplicate requirement ids in Draft v1 (FR-03/04, FR-26, NFR-08).
+Waiting on Travis: Resend domain verification (DKIM/SPF) for real OTP mail; remaining screen designs (Figma has only
+  Login); Render/Vercel deployment; GitHub main-branch protection.
+Technical: dataset activation is not transactional (Atlas supports it; local mongod does not); one intermittent test
+  flake seen once in the full suite; SSE streaming deferred; frontend has no unit tests yet.
+
+
+8. WHAT COMES NEXT (tasks/backlog.md)
+------------------------------------
+Phase 5 polish: review dashboard filters/pagination (DASH-01), escalation targets, administrator mandatory-review queue.
+T-028 department <-> persona mapping (PAID). Phase 6 reports/analytics + CSV/PDF export (PAID). Phase 7 security:
+PHI/PII masking, retention job (FREE reduction to login id/risk type/time/date/duration), SSO providers, multi-tenant
+guard audit, control mapping per sector. Phase 8: i18n wiring, rate limits, load test (100 concurrent, p95 <= 3 s),
+monitoring, DR drill. Phase 9: Playwright e2e for 4 roles, security scan, UAT, release checklist (docs/ai/DeploymentGuide.md).
