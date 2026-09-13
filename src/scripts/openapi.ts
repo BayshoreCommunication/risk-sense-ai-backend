@@ -12,6 +12,7 @@ import { CreateSessionBody } from '../modules/auth/routes';
 import { PersonaBody, PersonaListQuery, PersonaPatch } from '../modules/personas/schema';
 import { ScenarioBody, ScenarioListQuery, ScenarioPatch } from '../modules/scenarios/schema';
 import { QuestionBody, QuestionListQuery, QuestionPatch } from '../modules/questions/schema';
+import { JsonUploadBody } from '../modules/datasets/routes';
 
 extendZodWithOpenApi(z);
 const registry = new OpenAPIRegistry();
@@ -172,6 +173,21 @@ function registerContent(base: string, name: string, body: z.ZodTypeAny, patch: 
 registerContent('/personas', 'Persona', PersonaBody, PersonaPatch, PersonaListQuery, { versioned: true });
 registerContent('/scenarios', 'Scenario', ScenarioBody, ScenarioPatch, ScenarioListQuery, { versioned: true });
 registerContent('/questions', 'Question', QuestionBody, QuestionPatch, QuestionListQuery, { versioned: false });
+
+// ---- Datasets (T-024)
+const Dataset = Any.openapi('Dataset');
+registry.registerPath({ method: 'get', path: '/datasets/template', security: secured, responses: { 200: { description: 'XLSX content template', content: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': { schema: z.string().openapi({ format: 'binary' }) } } } } });
+registry.registerPath({ method: 'get', path: '/datasets', security: secured, responses: { 200: { description: 'Uploads, newest first (without content)', content: { 'application/json': { schema: Envelope(z.array(Dataset)) } } } } });
+registry.registerPath({
+  method: 'post',
+  path: '/datasets',
+  security: secured,
+  request: { body: { content: { 'application/json': { schema: JsonUploadBody }, 'multipart/form-data': { schema: z.object({ file: z.string().openapi({ format: 'binary' }) }) } } } },
+  responses: { 201: { description: 'Stored as validated or rejected (with validationErrors); nothing applied', content: { 'application/json': { schema: Envelope(Dataset) } } } },
+});
+registry.registerPath({ method: 'get', path: '/datasets/{id}', security: secured, request: { params: z.object({ id: z.string() }) }, responses: { 200: { description: 'Dataset with content', content: { 'application/json': { schema: Envelope(Dataset) } } } } });
+registry.registerPath({ method: 'post', path: '/datasets/{id}/approve', security: secured, request: { params: z.object({ id: z.string() }) }, responses: { 200: { description: 'Approved by a different administrator', content: { 'application/json': { schema: Envelope(Dataset) } } }, 422: { description: 'SELF_APPROVAL', content: { 'application/json': { schema: ErrorEnvelope } } } } });
+registry.registerPath({ method: 'post', path: '/datasets/{id}/activate', security: secured, request: { params: z.object({ id: z.string() }) }, responses: { 200: { description: 'Applied: personas, questions, scenarios created/versioned and activated', content: { 'application/json': { schema: Envelope(Dataset) } } }, 422: { description: 'NOT_APPROVED', content: { 'application/json': { schema: ErrorEnvelope } } } } });
 
 const doc = new OpenApiGeneratorV3(registry.definitions).generateDocument({
   openapi: '3.0.3',

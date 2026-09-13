@@ -8,6 +8,7 @@ import { env, isTest } from './config/env';
 import { logger } from './lib/logger';
 import { errorHandler, notFoundHandler } from './middleware/error';
 import { auditRouter } from './modules/audit/routes';
+import { datasetsRouter } from './modules/datasets/routes';
 import { authRouter } from './modules/auth/routes';
 import { healthRouter } from './modules/health/routes';
 import { personasRouter } from './modules/personas/routes';
@@ -56,6 +57,7 @@ export function createApp() {
   api.use('/personas', personasRouter);
   api.use('/scenarios', scenariosRouter);
   api.use('/questions', questionsRouter);
+  api.use('/datasets', datasetsRouter);
   app.use('/api/v1', api);
 
   app.use(notFoundHandler);

@@ -55,6 +55,7 @@ export async function seed() {
   const users = [
     { email: 'requestor@dev.local', name: 'Dev Requestor', role: 'requestor' as Role, tenantId: publicTenant._id },
     { email: 'admin@dev.local', name: 'Dev Administrator (TAC)', role: 'administrator' as Role, tenantId: publicTenant._id, mfaEnrolled: true },
+    { email: 'admin2@dev.local', name: 'Dev Administrator 2 (TAC reviewer)', role: 'administrator' as Role, tenantId: publicTenant._id, mfaEnrolled: true },
     { email: 'sysadmin@dev.local', name: 'Dev System Administrator (Bayshore)', role: 'system_administrator' as Role, tenantId: publicTenant._id, mfaEnrolled: true },
     { email: 'audit@dev.local', name: 'Dev Auditor', role: 'audit' as Role, tenantId: publicTenant._id },
     { email: 'requestor@paid.local', name: 'Acme Finance Requestor', role: 'requestor' as Role, tenantId: acme._id, departmentIds: [finance._id] },
