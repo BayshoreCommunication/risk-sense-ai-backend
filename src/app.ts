@@ -10,6 +10,9 @@ import { errorHandler, notFoundHandler } from './middleware/error';
 import { auditRouter } from './modules/audit/routes';
 import { authRouter } from './modules/auth/routes';
 import { healthRouter } from './modules/health/routes';
+import { personasRouter } from './modules/personas/routes';
+import { questionsRouter } from './modules/questions/routes';
+import { scenariosRouter } from './modules/scenarios/routes';
 import { usersRouter } from './modules/users/routes';
 
 export function createApp() {
@@ -50,6 +53,9 @@ export function createApp() {
   api.use('/auth', authRouter);
   api.use('/', usersRouter); // GET /me
   api.use('/audit-logs', auditRouter);
+  api.use('/personas', personasRouter);
+  api.use('/scenarios', scenariosRouter);
+  api.use('/questions', questionsRouter);
   app.use('/api/v1', api);
 
   app.use(notFoundHandler);

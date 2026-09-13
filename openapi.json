@@ -184,6 +184,24 @@
           "features",
           "sessionPolicy"
         ]
+      },
+      "Persona": {
+        "type": "object",
+        "additionalProperties": {
+          "nullable": true
+        }
+      },
+      "Scenario": {
+        "type": "object",
+        "additionalProperties": {
+          "nullable": true
+        }
+      },
+      "Question": {
+        "type": "object",
+        "additionalProperties": {
+          "nullable": true
+        }
       }
     },
     "parameters": {}
@@ -692,6 +710,2003 @@
                         "ok",
                         "checked"
                       ]
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/personas": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "draft",
+                "active",
+                "deactivated"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "financial",
+                "healthcare",
+                "it",
+                "general"
+              ]
+            },
+            "required": false,
+            "name": "sector",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "key",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "current",
+                "all"
+              ]
+            },
+            "required": false,
+            "name": "view",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List Personas",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Persona"
+                      }
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]{1,63}$"
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 120
+                  },
+                  "sector": {
+                    "type": "string",
+                    "enum": [
+                      "financial",
+                      "healthcare",
+                      "it",
+                      "general"
+                    ]
+                  },
+                  "description": {
+                    "type": "string",
+                    "minLength": 10,
+                    "maxLength": 2000
+                  },
+                  "responsibilities": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "default": []
+                  },
+                  "activities": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "default": []
+                  },
+                  "commonRisks": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "default": []
+                  },
+                  "vocabulary": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "default": []
+                  },
+                  "policies": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "default": []
+                  },
+                  "detectHints": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "default": []
+                  },
+                  "defaultScenarioKey": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]{1,63}$"
+                  }
+                },
+                "required": [
+                  "key",
+                  "name",
+                  "sector",
+                  "description"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Persona created (draft)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Persona"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONFLICT (duplicate key)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/personas/{id}": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Persona",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Persona"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]{1,63}$"
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 120
+                  },
+                  "sector": {
+                    "type": "string",
+                    "enum": [
+                      "financial",
+                      "healthcare",
+                      "it",
+                      "general"
+                    ]
+                  },
+                  "description": {
+                    "type": "string",
+                    "minLength": 10,
+                    "maxLength": 2000
+                  },
+                  "responsibilities": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "default": []
+                  },
+                  "activities": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "default": []
+                  },
+                  "commonRisks": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "default": []
+                  },
+                  "vocabulary": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "default": []
+                  },
+                  "policies": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "default": []
+                  },
+                  "detectHints": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "default": []
+                  },
+                  "defaultScenarioKey": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]{1,63}$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Draft updated in place, or a new draft version created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Persona"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/personas/{id}/history": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "All versions, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Persona"
+                      }
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/personas/{id}/activate": {
+      "post": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Activated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Persona"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "NO_LINKED_QUESTIONS / validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/personas/{id}/deactivate": {
+      "post": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deactivated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Persona"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/scenarios": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "personaKey",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "draft",
+                "active",
+                "deactivated"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "key",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "current",
+                "all"
+              ]
+            },
+            "required": false,
+            "name": "view",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List Scenarios",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Scenario"
+                      }
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]{1,63}$"
+                  },
+                  "personaKey": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]{1,63}$"
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 160
+                  },
+                  "description": {
+                    "type": "string",
+                    "minLength": 10,
+                    "maxLength": 4000
+                  },
+                  "businessContext": {
+                    "type": "string",
+                    "minLength": 5,
+                    "maxLength": 4000
+                  },
+                  "learningObjective": {
+                    "type": "string",
+                    "maxLength": 2000
+                  },
+                  "riskIndicators": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "default": []
+                  },
+                  "conversationFlow": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "questionKey": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_]{1,63}$"
+                        },
+                        "showIf": {
+                          "type": "object",
+                          "properties": {
+                            "factKey": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]{1,63}$"
+                            },
+                            "equals": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "boolean"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "factKey",
+                            "equals"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "questionKey"
+                      ]
+                    },
+                    "default": []
+                  },
+                  "requiredFactKeys": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]{1,63}$"
+                    },
+                    "default": []
+                  },
+                  "expectedClassification": {
+                    "type": "string",
+                    "enum": [
+                      "monitor_only",
+                      "risk",
+                      "elevated_risk",
+                      "issue"
+                    ]
+                  },
+                  "reasoningExample": {
+                    "type": "string",
+                    "maxLength": 4000
+                  },
+                  "recommendedActions": {
+                    "type": "object",
+                    "properties": {
+                      "monitor_only": {
+                        "type": "object",
+                        "properties": {
+                          "decisionRecommendation": {
+                            "type": "string",
+                            "minLength": 2
+                          },
+                          "nextSteps": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "default": []
+                          }
+                        },
+                        "required": [
+                          "decisionRecommendation"
+                        ]
+                      },
+                      "risk": {
+                        "type": "object",
+                        "properties": {
+                          "decisionRecommendation": {
+                            "type": "string",
+                            "minLength": 2
+                          },
+                          "nextSteps": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "default": []
+                          }
+                        },
+                        "required": [
+                          "decisionRecommendation"
+                        ]
+                      },
+                      "elevated_risk": {
+                        "type": "object",
+                        "properties": {
+                          "decisionRecommendation": {
+                            "type": "string",
+                            "minLength": 2
+                          },
+                          "nextSteps": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "default": []
+                          }
+                        },
+                        "required": [
+                          "decisionRecommendation"
+                        ]
+                      },
+                      "issue": {
+                        "type": "object",
+                        "properties": {
+                          "decisionRecommendation": {
+                            "type": "string",
+                            "minLength": 2
+                          },
+                          "nextSteps": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "default": []
+                          }
+                        },
+                        "required": [
+                          "decisionRecommendation"
+                        ]
+                      }
+                    },
+                    "default": {}
+                  }
+                },
+                "required": [
+                  "key",
+                  "personaKey",
+                  "name",
+                  "description",
+                  "businessContext"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Scenario created (draft)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Scenario"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONFLICT (duplicate key)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/scenarios/{id}": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scenario",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Scenario"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "personaKey": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]{1,63}$"
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 160
+                  },
+                  "description": {
+                    "type": "string",
+                    "minLength": 10,
+                    "maxLength": 4000
+                  },
+                  "businessContext": {
+                    "type": "string",
+                    "minLength": 5,
+                    "maxLength": 4000
+                  },
+                  "learningObjective": {
+                    "type": "string",
+                    "maxLength": 2000
+                  },
+                  "riskIndicators": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "default": []
+                  },
+                  "conversationFlow": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "questionKey": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_]{1,63}$"
+                        },
+                        "showIf": {
+                          "type": "object",
+                          "properties": {
+                            "factKey": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]{1,63}$"
+                            },
+                            "equals": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "boolean"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "factKey",
+                            "equals"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "questionKey"
+                      ]
+                    },
+                    "default": []
+                  },
+                  "requiredFactKeys": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]{1,63}$"
+                    },
+                    "default": []
+                  },
+                  "expectedClassification": {
+                    "type": "string",
+                    "enum": [
+                      "monitor_only",
+                      "risk",
+                      "elevated_risk",
+                      "issue"
+                    ]
+                  },
+                  "reasoningExample": {
+                    "type": "string",
+                    "maxLength": 4000
+                  },
+                  "recommendedActions": {
+                    "type": "object",
+                    "properties": {
+                      "monitor_only": {
+                        "type": "object",
+                        "properties": {
+                          "decisionRecommendation": {
+                            "type": "string",
+                            "minLength": 2
+                          },
+                          "nextSteps": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "default": []
+                          }
+                        },
+                        "required": [
+                          "decisionRecommendation"
+                        ]
+                      },
+                      "risk": {
+                        "type": "object",
+                        "properties": {
+                          "decisionRecommendation": {
+                            "type": "string",
+                            "minLength": 2
+                          },
+                          "nextSteps": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "default": []
+                          }
+                        },
+                        "required": [
+                          "decisionRecommendation"
+                        ]
+                      },
+                      "elevated_risk": {
+                        "type": "object",
+                        "properties": {
+                          "decisionRecommendation": {
+                            "type": "string",
+                            "minLength": 2
+                          },
+                          "nextSteps": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "default": []
+                          }
+                        },
+                        "required": [
+                          "decisionRecommendation"
+                        ]
+                      },
+                      "issue": {
+                        "type": "object",
+                        "properties": {
+                          "decisionRecommendation": {
+                            "type": "string",
+                            "minLength": 2
+                          },
+                          "nextSteps": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "default": []
+                          }
+                        },
+                        "required": [
+                          "decisionRecommendation"
+                        ]
+                      }
+                    },
+                    "default": {}
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Draft updated in place, or a new draft version created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Scenario"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/scenarios/{id}/history": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "All versions, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Scenario"
+                      }
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/scenarios/{id}/activate": {
+      "post": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Activated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Scenario"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "NO_LINKED_QUESTIONS / validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/scenarios/{id}/deactivate": {
+      "post": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deactivated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Scenario"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/questions": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "personaKey",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "scenarioKey",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "financial",
+                "healthcare",
+                "it",
+                "general"
+              ]
+            },
+            "required": false,
+            "name": "sector",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "retired"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "key",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List Questions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Question"
+                      }
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]{1,63}$"
+                  },
+                  "text": {
+                    "type": "string",
+                    "minLength": 5,
+                    "maxLength": 500
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "mcq",
+                      "yes_no",
+                      "free_text",
+                      "number"
+                    ]
+                  },
+                  "options": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "label": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "factValue": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "boolean"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "label",
+                        "factValue"
+                      ]
+                    },
+                    "default": []
+                  },
+                  "factKey": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]{1,63}$"
+                  },
+                  "required": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "tags": {
+                    "type": "object",
+                    "properties": {
+                      "personaKeys": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_]{1,63}$"
+                        },
+                        "minItems": 1
+                      },
+                      "scenarioKeys": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_]{1,63}$"
+                        },
+                        "default": []
+                      },
+                      "sectors": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "financial",
+                            "healthcare",
+                            "it",
+                            "general"
+                          ]
+                        },
+                        "minItems": 1
+                      },
+                      "category": {
+                        "type": "string",
+                        "maxLength": 80
+                      }
+                    },
+                    "required": [
+                      "personaKeys",
+                      "sectors"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "branchTrigger": {
+                    "type": "object",
+                    "properties": {
+                      "onValue": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          }
+                        ]
+                      },
+                      "questionKeys": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_]{1,63}$"
+                        },
+                        "minItems": 1
+                      }
+                    },
+                    "required": [
+                      "onValue",
+                      "questionKeys"
+                    ]
+                  },
+                  "scoringHint": {
+                    "type": "string",
+                    "maxLength": 300
+                  }
+                },
+                "required": [
+                  "key",
+                  "text",
+                  "type",
+                  "factKey",
+                  "tags"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Question created (draft)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Question"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONFLICT (duplicate key)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/questions/{id}": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Question",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Question"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "minLength": 5,
+                    "maxLength": 500
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "mcq",
+                      "yes_no",
+                      "free_text",
+                      "number"
+                    ]
+                  },
+                  "options": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "label": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "factValue": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "boolean"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "label",
+                        "factValue"
+                      ]
+                    },
+                    "default": []
+                  },
+                  "factKey": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]{1,63}$"
+                  },
+                  "required": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "tags": {
+                    "type": "object",
+                    "properties": {
+                      "personaKeys": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_]{1,63}$"
+                        },
+                        "minItems": 1
+                      },
+                      "scenarioKeys": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_]{1,63}$"
+                        },
+                        "default": []
+                      },
+                      "sectors": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "financial",
+                            "healthcare",
+                            "it",
+                            "general"
+                          ]
+                        },
+                        "minItems": 1
+                      },
+                      "category": {
+                        "type": "string",
+                        "maxLength": 80
+                      }
+                    },
+                    "required": [
+                      "personaKeys",
+                      "sectors"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "branchTrigger": {
+                    "type": "object",
+                    "properties": {
+                      "onValue": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          }
+                        ]
+                      },
+                      "questionKeys": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_]{1,63}$"
+                        },
+                        "minItems": 1
+                      }
+                    },
+                    "required": [
+                      "onValue",
+                      "questionKeys"
+                    ]
+                  },
+                  "scoringHint": {
+                    "type": "string",
+                    "maxLength": 300
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Question"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/questions/{id}/retire": {
+      "post": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Retired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Question"
                     },
                     "meta": {
                       "type": "object",

@@ -9,6 +9,9 @@ import { ROLES } from '../modules/users/model';
 import { TENANT_PLANS } from '../modules/tenants/model';
 import { ListAuditQuery } from '../modules/audit/routes';
 import { CreateSessionBody } from '../modules/auth/routes';
+import { PersonaBody, PersonaListQuery, PersonaPatch } from '../modules/personas/schema';
+import { ScenarioBody, ScenarioListQuery, ScenarioPatch } from '../modules/scenarios/schema';
+import { QuestionBody, QuestionListQuery, QuestionPatch } from '../modules/questions/schema';
 
 extendZodWithOpenApi(z);
 const registry = new OpenAPIRegistry();
@@ -148,6 +151,27 @@ registry.registerPath({
     },
   },
 });
+
+// ---- Content modules (personas, scenarios, questions) — Phase 2
+const Any = z.record(z.unknown());
+const secured = [{ [bearer.name]: [], [sessionHeader.name]: [] }];
+function registerContent(base: string, name: string, body: z.ZodTypeAny, patch: z.ZodTypeAny, query: z.AnyZodObject, extra: { versioned: boolean }) {
+  const Item = Any.openapi(name);
+  registry.registerPath({ method: 'get', path: base, security: secured, request: { query }, responses: { 200: { description: `List ${name}s`, content: { 'application/json': { schema: Envelope(z.array(Item)) } } } } });
+  registry.registerPath({ method: 'post', path: base, security: secured, request: { body: { content: { 'application/json': { schema: body } } } }, responses: { 201: { description: `${name} created (draft)`, content: { 'application/json': { schema: Envelope(Item) } } }, 409: { description: 'CONFLICT (duplicate key)', content: { 'application/json': { schema: ErrorEnvelope } } } } });
+  registry.registerPath({ method: 'get', path: `${base}/{id}`, security: secured, request: { params: z.object({ id: z.string() }) }, responses: { 200: { description: name, content: { 'application/json': { schema: Envelope(Item) } } } } });
+  registry.registerPath({ method: 'patch', path: `${base}/{id}`, security: secured, request: { params: z.object({ id: z.string() }), body: { content: { 'application/json': { schema: patch } } } }, responses: { 200: { description: extra.versioned ? 'Draft updated in place, or a new draft version created' : 'Updated', content: { 'application/json': { schema: Envelope(Item) } } } } });
+  if (extra.versioned) {
+    registry.registerPath({ method: 'get', path: `${base}/{id}/history`, security: secured, request: { params: z.object({ id: z.string() }) }, responses: { 200: { description: 'All versions, newest first', content: { 'application/json': { schema: Envelope(z.array(Item)) } } } } });
+    registry.registerPath({ method: 'post', path: `${base}/{id}/activate`, security: secured, request: { params: z.object({ id: z.string() }) }, responses: { 200: { description: 'Activated', content: { 'application/json': { schema: Envelope(Item) } } }, 422: { description: 'NO_LINKED_QUESTIONS / validation', content: { 'application/json': { schema: ErrorEnvelope } } } } });
+    registry.registerPath({ method: 'post', path: `${base}/{id}/deactivate`, security: secured, request: { params: z.object({ id: z.string() }) }, responses: { 200: { description: 'Deactivated', content: { 'application/json': { schema: Envelope(Item) } } } } });
+  } else {
+    registry.registerPath({ method: 'post', path: `${base}/{id}/retire`, security: secured, request: { params: z.object({ id: z.string() }) }, responses: { 200: { description: 'Retired', content: { 'application/json': { schema: Envelope(Item) } } } } });
+  }
+}
+registerContent('/personas', 'Persona', PersonaBody, PersonaPatch, PersonaListQuery, { versioned: true });
+registerContent('/scenarios', 'Scenario', ScenarioBody, ScenarioPatch, ScenarioListQuery, { versioned: true });
+registerContent('/questions', 'Question', QuestionBody, QuestionPatch, QuestionListQuery, { versioned: false });
 
 const doc = new OpenApiGeneratorV3(registry.definitions).generateDocument({
   openapi: '3.0.3',
