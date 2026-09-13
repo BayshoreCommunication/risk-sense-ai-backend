@@ -22,6 +22,7 @@ const schema = z
     OPENAI_API_KEY: z.string().optional(),
     OPENAI_MODEL: z.string().default('gpt-4.1-mini'),
     OPENAI_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
+    AI_PROVIDER: z.enum(['auto', 'openai', 'mock']).default('auto'), // mock = deterministic heuristics (tests, dev without key)
 
     // Second factor (T-016)
     OTP_TTL_MIN: z.coerce.number().int().min(1).max(30).default(10),

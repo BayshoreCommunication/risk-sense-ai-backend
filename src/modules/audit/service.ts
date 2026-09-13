@@ -39,6 +39,8 @@ const tails = new Map<string, Promise<unknown>>();
 export const audit = {
   async write(input: AuditEntryInput) {
     const key = input.tenantId;
+    // Payloads may contain Mongoose documents/subdocuments (circular parent refs); store and hash a plain copy.
+    const payload = JSON.parse(JSON.stringify(input.payload ?? {})) as Record<string, unknown>;
     const run = async () => {
       for (let attempt = 0; attempt < 3; attempt++) {
         const last = await AuditLogModel.findOne({ tenantId: input.tenantId }).sort({ seq: -1 }).select('seq hash').lean();
@@ -52,7 +54,7 @@ export const audit = {
           actorUserId: input.actor?.id ?? null,
           actorRole: input.actor?.role ?? null,
           entity: input.entity,
-          payload: input.payload ?? {},
+          payload,
           prevHash,
         };
         const hash = hashInput(base);

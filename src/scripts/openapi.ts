@@ -15,6 +15,7 @@ import { QuestionBody, QuestionListQuery, QuestionPatch } from '../modules/quest
 import { JsonUploadBody } from '../modules/datasets/routes';
 import { RuleBody, RuleListQuery, RulePatch, ApproveBody as RuleApproveBody } from '../modules/rules/schema';
 import { MatrixBody, MatrixListQuery, MatrixPatch, SimulateBody } from '../modules/scoring/schema';
+import { DecisionBody, ListQuery as AssessmentListQuery, MessageBody, PersonaBody as AssessmentPersonaBody, StartBody } from '../modules/assessments/schema';
 
 extendZodWithOpenApi(z);
 const registry = new OpenAPIRegistry();
@@ -211,6 +212,19 @@ registry.registerPath({ method: 'post', path: '/scoring-matrices/{id}/approve', 
 registry.registerPath({ method: 'post', path: '/scoring-matrices/{id}/activate', security: secured, request: { params: z.object({ id: z.string() }) }, responses: { 200: { description: 'Active + current', content: { 'application/json': { schema: Envelope(Matrix) } } }, 422: { description: 'NOT_APPROVED', content: { 'application/json': { schema: ErrorEnvelope } } } } });
 registry.registerPath({ method: 'post', path: '/scoring-matrices/{id}/deactivate', security: secured, request: { params: z.object({ id: z.string() }) }, responses: { 200: { description: 'Deactivated', content: { 'application/json': { schema: Envelope(Matrix) } } } } });
 registry.registerPath({ method: 'post', path: '/scoring/simulate', security: secured, request: { body: { content: { 'application/json': { schema: SimulateBody } } } }, responses: { 200: { description: 'Score, factors, classification, confidence, rule result', content: { 'application/json': { schema: Envelope(Any) } } } } });
+
+// ---- Assessments (Phase 3)
+const Assessment = Any.openapi('Assessment');
+const Turn = Any.openapi('AssessmentTurn'); // assessment view + { nextQuestion, intakeComplete, missingRequired }
+const idp = z.object({ id: z.string() });
+registry.registerPath({ method: 'post', path: '/assessments', security: secured, request: { body: { content: { 'application/json': { schema: StartBody } } } }, responses: { 201: { description: 'Started; persona set or candidates offered; first question when scenario chosen', content: { 'application/json': { schema: Envelope(Turn) } } } } });
+registry.registerPath({ method: 'get', path: '/assessments', security: secured, request: { query: AssessmentListQuery }, responses: { 200: { description: 'Own / department assessments', content: { 'application/json': { schema: Envelope(z.object({ items: z.array(Assessment), total: z.number(), page: z.number(), limit: z.number() })) } } } } });
+registry.registerPath({ method: 'get', path: '/assessments/{id}', security: secured, request: { params: idp }, responses: { 200: { description: 'Assessment', content: { 'application/json': { schema: Envelope(Assessment) } } } } });
+registry.registerPath({ method: 'get', path: '/assessments/{id}/messages', security: secured, request: { params: idp }, responses: { 200: { description: 'Transcript', content: { 'application/json': { schema: Envelope(z.array(Any)) } } } } });
+registry.registerPath({ method: 'post', path: '/assessments/{id}/persona', security: secured, request: { params: idp, body: { content: { 'application/json': { schema: AssessmentPersonaBody } } } }, responses: { 200: { description: 'Persona set/overridden', content: { 'application/json': { schema: Envelope(Turn) } } } } });
+registry.registerPath({ method: 'post', path: '/assessments/{id}/messages', security: secured, request: { params: idp, body: { content: { 'application/json': { schema: MessageBody } } } }, responses: { 200: { description: 'Answer recorded; next question or intakeComplete', content: { 'application/json': { schema: Envelope(Turn) } } } } });
+registry.registerPath({ method: 'post', path: '/assessments/{id}/submit', security: secured, request: { params: idp }, responses: { 200: { description: 'Result computed (rules → scoring → explanation)', content: { 'application/json': { schema: Envelope(Assessment) } } }, 422: { description: 'MISSING_REQUIRED_FACTS', content: { 'application/json': { schema: ErrorEnvelope } } } } });
+registry.registerPath({ method: 'post', path: '/assessments/{id}/decision', security: secured, request: { params: idp, body: { content: { 'application/json': { schema: DecisionBody } } } }, responses: { 200: { description: 'Decision recorded; closed or escalated', content: { 'application/json': { schema: Envelope(Assessment) } } } } });
 
 const doc = new OpenApiGeneratorV3(registry.definitions).generateDocument({
   openapi: '3.0.3',

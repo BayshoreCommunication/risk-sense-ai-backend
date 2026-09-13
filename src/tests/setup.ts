@@ -7,7 +7,7 @@ import { afterAll, beforeAll, beforeEach } from 'vitest';
 
 process.env.NODE_ENV = 'test';
 process.env.AUTH_DEV_BYPASS = 'true';
-process.env.LOG_LEVEL = 'silent';
+process.env.LOG_LEVEL = process.env.TEST_LOG_LEVEL ?? 'silent';
 process.env.MAIL_PROVIDER = 'console'; // tests never send real mail, whatever .env says
 process.env.MONGODB_URI = 'mongodb://127.0.0.1:1/unused'; // replaced by the in-memory server below
 for (const bin of ['/opt/homebrew/bin/mongod', '/usr/local/bin/mongod']) {

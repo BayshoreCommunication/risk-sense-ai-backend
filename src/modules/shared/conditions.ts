@@ -107,3 +107,13 @@ export function parseLeaf(text: string): Condition | null {
   const value = normalizeValue(raw!.replace(/^["']|["']$/g, ''));
   return { factKey: factKey!, op, value: value as FactValue };
 }
+
+const OP_TEXT: Record<Op, string> = { eq: '=', ne: '≠', gt: '>', gte: '≥', lt: '<', lte: '≤', in: 'in', exists: 'exists' };
+/** Human-readable form for explanations and audit payloads, e.g. `amount_usd > 100000`. */
+export function conditionText(c: Condition | undefined): string {
+  if (!c) return '';
+  if (c.all) return c.all.map(conditionText).join(' and ');
+  if (c.any) return c.any.map(conditionText).join(' or ');
+  const v = Array.isArray(c.value) ? `[${c.value.join(', ')}]` : String(c.value ?? '');
+  return c.op === 'exists' ? `${c.factKey} exists` : `${c.factKey} ${OP_TEXT[c.op!]} ${v}`;
+}

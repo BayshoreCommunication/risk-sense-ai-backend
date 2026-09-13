@@ -7,6 +7,7 @@ import pinoHttp from 'pino-http';
 import { env, isTest } from './config/env';
 import { logger } from './lib/logger';
 import { errorHandler, notFoundHandler } from './middleware/error';
+import { assessmentsRouter } from './modules/assessments/routes';
 import { auditRouter } from './modules/audit/routes';
 import { datasetsRouter } from './modules/datasets/routes';
 import { authRouter } from './modules/auth/routes';
@@ -63,6 +64,7 @@ export function createApp() {
   api.use('/rules', rulesRouter);
   api.use('/scoring-matrices', matricesRouter);
   api.use('/scoring', scoringRouter);
+  api.use('/assessments', assessmentsRouter);
   app.use('/api/v1', api);
 
   app.use(notFoundHandler);

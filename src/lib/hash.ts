@@ -14,8 +14,10 @@ function sortKeys(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortKeys);
   if (typeof value === 'object') {
     // Mongoose ObjectId and similar: use their string form.
-    const v = value as { toHexString?: () => string; toJSON?: () => unknown };
+    const v = value as { toHexString?: () => string; toObject?: () => unknown; toJSON?: () => unknown };
     if (typeof v.toHexString === 'function') return v.toHexString();
+    if (typeof v.toObject === 'function') return sortKeys(v.toObject()); // Mongoose document / subdocument / array
+    if (typeof v.toJSON === 'function' && !(value instanceof Date)) return sortKeys(v.toJSON());
     const out: Record<string, unknown> = {};
     for (const key of Object.keys(value as object).sort()) {
       const inner = (value as Record<string, unknown>)[key];

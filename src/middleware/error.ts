@@ -1,5 +1,6 @@
 import type { ErrorRequestHandler, RequestHandler } from 'express';
 import { ZodError } from 'zod';
+import { isProd } from '../config/env';
 import { AppError } from '../lib/errors';
 import { logger } from '../lib/logger';
 
@@ -31,5 +32,7 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
   }
 
   logger.error({ err, requestId }, 'unhandled error');
-  res.status(500).json({ error: { code: 'INTERNAL', message: 'Internal server error' }, meta: { requestId } });
+  // Outside production the real message helps debugging; in production it is masked.
+  const message = isProd ? 'Internal server error' : `Internal server error: ${(err as Error)?.message ?? String(err)}`;
+  res.status(500).json({ error: { code: 'INTERNAL', message }, meta: { requestId } });
 };
