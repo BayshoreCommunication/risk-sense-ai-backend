@@ -13,6 +13,8 @@ import { PersonaBody, PersonaListQuery, PersonaPatch } from '../modules/personas
 import { ScenarioBody, ScenarioListQuery, ScenarioPatch } from '../modules/scenarios/schema';
 import { QuestionBody, QuestionListQuery, QuestionPatch } from '../modules/questions/schema';
 import { JsonUploadBody } from '../modules/datasets/routes';
+import { RuleBody, RuleListQuery, RulePatch, ApproveBody as RuleApproveBody } from '../modules/rules/schema';
+import { MatrixBody, MatrixListQuery, MatrixPatch, SimulateBody } from '../modules/scoring/schema';
 
 extendZodWithOpenApi(z);
 const registry = new OpenAPIRegistry();
@@ -188,6 +190,27 @@ registry.registerPath({
 registry.registerPath({ method: 'get', path: '/datasets/{id}', security: secured, request: { params: z.object({ id: z.string() }) }, responses: { 200: { description: 'Dataset with content', content: { 'application/json': { schema: Envelope(Dataset) } } } } });
 registry.registerPath({ method: 'post', path: '/datasets/{id}/approve', security: secured, request: { params: z.object({ id: z.string() }) }, responses: { 200: { description: 'Approved by a different administrator', content: { 'application/json': { schema: Envelope(Dataset) } } }, 422: { description: 'SELF_APPROVAL', content: { 'application/json': { schema: ErrorEnvelope } } } } });
 registry.registerPath({ method: 'post', path: '/datasets/{id}/activate', security: secured, request: { params: z.object({ id: z.string() }) }, responses: { 200: { description: 'Applied: personas, questions, scenarios created/versioned and activated', content: { 'application/json': { schema: Envelope(Dataset) } } }, 422: { description: 'NOT_APPROVED', content: { 'application/json': { schema: ErrorEnvelope } } } } });
+
+// ---- Rules (T-025) and scoring matrices (T-026)
+const Rule = Any.openapi('Rule');
+registry.registerPath({ method: 'get', path: '/rules', security: secured, request: { query: RuleListQuery }, responses: { 200: { description: 'Rules by priority', content: { 'application/json': { schema: Envelope(z.array(Rule)) } } } } });
+registry.registerPath({ method: 'post', path: '/rules', security: secured, request: { body: { content: { 'application/json': { schema: RuleBody } } } }, responses: { 201: { description: 'Draft rule', content: { 'application/json': { schema: Envelope(Rule) } } } } });
+registry.registerPath({ method: 'get', path: '/rules/{id}', security: secured, request: { params: z.object({ id: z.string() }) }, responses: { 200: { description: 'Rule', content: { 'application/json': { schema: Envelope(Rule) } } } } });
+registry.registerPath({ method: 'patch', path: '/rules/{id}', security: secured, request: { params: z.object({ id: z.string() }), body: { content: { 'application/json': { schema: RulePatch } } } }, responses: { 200: { description: 'Updated (back to draft)', content: { 'application/json': { schema: Envelope(Rule) } } } } });
+registry.registerPath({ method: 'post', path: '/rules/{id}/approve', security: secured, request: { params: z.object({ id: z.string() }), body: { content: { 'application/json': { schema: RuleApproveBody } } } }, responses: { 200: { description: 'Approved', content: { 'application/json': { schema: Envelope(Rule) } } }, 422: { description: 'SELF_APPROVAL', content: { 'application/json': { schema: ErrorEnvelope } } } } });
+registry.registerPath({ method: 'post', path: '/rules/{id}/activate', security: secured, request: { params: z.object({ id: z.string() }) }, responses: { 200: { description: 'Active', content: { 'application/json': { schema: Envelope(Rule) } } }, 422: { description: 'NOT_APPROVED', content: { 'application/json': { schema: ErrorEnvelope } } } } });
+registry.registerPath({ method: 'post', path: '/rules/{id}/retire', security: secured, request: { params: z.object({ id: z.string() }) }, responses: { 200: { description: 'Retired', content: { 'application/json': { schema: Envelope(Rule) } } } } });
+
+const Matrix = Any.openapi('ScoringMatrix');
+registry.registerPath({ method: 'get', path: '/scoring-matrices', security: secured, request: { query: MatrixListQuery }, responses: { 200: { description: 'Matrices', content: { 'application/json': { schema: Envelope(z.array(Matrix)) } } } } });
+registry.registerPath({ method: 'post', path: '/scoring-matrices', security: secured, request: { body: { content: { 'application/json': { schema: MatrixBody } } } }, responses: { 201: { description: 'Draft matrix', content: { 'application/json': { schema: Envelope(Matrix) } } } } });
+registry.registerPath({ method: 'get', path: '/scoring-matrices/{id}', security: secured, request: { params: z.object({ id: z.string() }) }, responses: { 200: { description: 'Matrix', content: { 'application/json': { schema: Envelope(Matrix) } } } } });
+registry.registerPath({ method: 'get', path: '/scoring-matrices/{id}/history', security: secured, request: { params: z.object({ id: z.string() }) }, responses: { 200: { description: 'Versions', content: { 'application/json': { schema: Envelope(z.array(Matrix)) } } } } });
+registry.registerPath({ method: 'patch', path: '/scoring-matrices/{id}', security: secured, request: { params: z.object({ id: z.string() }), body: { content: { 'application/json': { schema: MatrixPatch } } } }, responses: { 200: { description: 'Draft updated or new draft version (approval cleared)', content: { 'application/json': { schema: Envelope(Matrix) } } } } });
+registry.registerPath({ method: 'post', path: '/scoring-matrices/{id}/approve', security: secured, request: { params: z.object({ id: z.string() }), body: { content: { 'application/json': { schema: RuleApproveBody } } } }, responses: { 200: { description: 'Approved', content: { 'application/json': { schema: Envelope(Matrix) } } }, 422: { description: 'SELF_APPROVAL', content: { 'application/json': { schema: ErrorEnvelope } } } } });
+registry.registerPath({ method: 'post', path: '/scoring-matrices/{id}/activate', security: secured, request: { params: z.object({ id: z.string() }) }, responses: { 200: { description: 'Active + current', content: { 'application/json': { schema: Envelope(Matrix) } } }, 422: { description: 'NOT_APPROVED', content: { 'application/json': { schema: ErrorEnvelope } } } } });
+registry.registerPath({ method: 'post', path: '/scoring-matrices/{id}/deactivate', security: secured, request: { params: z.object({ id: z.string() }) }, responses: { 200: { description: 'Deactivated', content: { 'application/json': { schema: Envelope(Matrix) } } } } });
+registry.registerPath({ method: 'post', path: '/scoring/simulate', security: secured, request: { body: { content: { 'application/json': { schema: SimulateBody } } } }, responses: { 200: { description: 'Score, factors, classification, confidence, rule result', content: { 'application/json': { schema: Envelope(Any) } } } } });
 
 const doc = new OpenApiGeneratorV3(registry.definitions).generateDocument({
   openapi: '3.0.3',

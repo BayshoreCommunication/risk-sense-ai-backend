@@ -39,6 +39,8 @@ const datasetSchema = new Schema(
       personas: { type: [String], default: [] }, // keys created/updated
       scenarios: { type: [String], default: [] },
       questions: { type: [String], default: [] },
+      rules: { type: [String], default: [] },
+      matrix: { type: String },
     },
     failure: { type: String },
   },

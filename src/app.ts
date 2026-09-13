@@ -13,6 +13,8 @@ import { authRouter } from './modules/auth/routes';
 import { healthRouter } from './modules/health/routes';
 import { personasRouter } from './modules/personas/routes';
 import { questionsRouter } from './modules/questions/routes';
+import { rulesRouter } from './modules/rules/routes';
+import { matricesRouter, scoringRouter } from './modules/scoring/routes';
 import { scenariosRouter } from './modules/scenarios/routes';
 import { usersRouter } from './modules/users/routes';
 
@@ -58,6 +60,9 @@ export function createApp() {
   api.use('/scenarios', scenariosRouter);
   api.use('/questions', questionsRouter);
   api.use('/datasets', datasetsRouter);
+  api.use('/rules', rulesRouter);
+  api.use('/scoring-matrices', matricesRouter);
+  api.use('/scoring', scoringRouter);
   app.use('/api/v1', api);
 
   app.use(notFoundHandler);

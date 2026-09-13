@@ -8,6 +8,10 @@ import { QuestionModel } from '../questions/model';
 import { questionsService } from '../questions/service';
 import { ScenarioModel } from '../scenarios/model';
 import { scenariosService } from '../scenarios/service';
+import { rulesService } from '../rules/service';
+import { RuleModel } from '../rules/model';
+import { scoringService } from '../scoring/service';
+import { ScoringMatrixModel } from '../scoring/model';
 import { DatasetModel } from './model';
 import { parseUpload, type ParsedContent, type RowError } from './parse';
 import { TEMPLATE_VERSION } from './template';
@@ -80,6 +84,13 @@ async function crossValidate(tenantId: string, parsed: ParsedContent): Promise<R
       if (!produced.has(f)) errors.push({ sheet: 'scenarios', row: s.row, column: 'required_fact_keys', message: `no reachable question produces fact "${f}" (FR-03)` });
     }
   }
+  if (parsed.scoring.length) {
+    const rows = parsed.scoring.map((r) => r.raw);
+    const m = scoringService.parseSheet(rows);
+    m.errors.forEach((msg) => errors.push({ sheet: 'scoring', row: 0, column: 'mapping', message: msg }));
+    const first = rows.find((r) => r.hard_rules?.trim());
+    if (first) rulesService.parseSheetRules(first.hard_rules!).errors.forEach((msg) => errors.push({ sheet: 'scoring', row: 0, column: 'hard_rules', message: msg }));
+  }
   return errors;
 }
 
@@ -149,7 +160,7 @@ export const datasetsService = {
     const doc = await load(tenantId, id);
     if (doc.status !== 'approved') throw new AppError('NOT_APPROVED', `dataset is ${doc.status}; approve it first (AI-06)`);
     const content = doc.content as ParsedContent;
-    const applied = { personas: [] as string[], scenarios: [] as string[], questions: [] as string[] };
+    const applied = { personas: [] as string[], scenarios: [] as string[], questions: [] as string[], rules: [] as string[], matrix: undefined as string | undefined };
     try {
       for (const p of content.personas) {
         const current = await PersonaModel.findOne({ tenantId, key: p.body.key, isCurrent: true }).lean();
@@ -174,6 +185,33 @@ export const datasetsService = {
         const target = current ? await scenariosService.update(tenantId, String(current._id), patch, actor) : await scenariosService.create(tenantId, s.body, actor);
         await scenariosService.activate(tenantId, String(target._id), actor);
         applied.scenarios.push(s.body.key);
+      }
+      // Scoring sheet → matrix + hard rules. The dataset reviewer is the approval record (AI-05, AI-06).
+      if (content.scoring.length && doc.reviewerId) {
+        const reviewer: AuthUser = { ...actor, id: String(doc.reviewerId), role: 'administrator' };
+        const rows = content.scoring.map((r) => r.raw);
+        const parsedMatrix = scoringService.parseSheet(rows);
+        if (parsedMatrix.body) {
+          const currentMatrix = await ScoringMatrixModel.findOne({ tenantId, key: parsedMatrix.body.key, isCurrent: true }).lean();
+          const { key: _mk, ...mpatch } = parsedMatrix.body;
+          const target = currentMatrix
+            ? await scoringService.update(tenantId, String(currentMatrix._id), mpatch, actor)
+            : await scoringService.create(tenantId, parsedMatrix.body, actor);
+          await scoringService.approve(tenantId, String(target._id), reviewer, `dataset #${doc.seq}`);
+          await scoringService.activate(tenantId, String(target._id), actor);
+          applied.matrix = `${parsedMatrix.body.key} v${target.version}`;
+        }
+        const first = rows.find((r) => r.hard_rules?.trim());
+        if (first) {
+          for (const r of rulesService.parseSheetRules(first.hard_rules!).rules) {
+            const existing = await RuleModel.findOne({ tenantId, key: r.key }).lean();
+            const { key: _rk, ...rpatch } = r;
+            const target = existing ? await rulesService.update(tenantId, String(existing._id), rpatch, actor) : await rulesService.create(tenantId, { ...r, sectors: [] }, actor);
+            await rulesService.approve(tenantId, String(target._id), reviewer, `dataset #${doc.seq}`);
+            await rulesService.activate(tenantId, String(target._id), actor);
+            applied.rules.push(r.key);
+          }
+        }
       }
     } catch (err) {
       doc.status = 'failed';

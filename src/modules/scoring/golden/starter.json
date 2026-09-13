@@ -1,0 +1,159 @@
+[
+  {
+    "name": "Confirmed fraud is an Issue regardless of amount (hard rule)",
+    "facts": {
+      "affected_process": "vendor payment",
+      "amount_usd": 900,
+      "fraud_suspected": true,
+      "fraud_confirmed": "confirmed",
+      "controls_bypassed": false,
+      "incident_status": "contained"
+    },
+    "requiredFactKeys": [
+      "affected_process",
+      "amount_usd",
+      "fraud_suspected",
+      "controls_bypassed",
+      "incident_status"
+    ],
+    "expect": {
+      "classification": "issue",
+      "ruleDriven": true
+    }
+  },
+  {
+    "name": "Large unauthorized wire with controls bypassed, still active \u2192 Elevated Risk",
+    "facts": {
+      "affected_process": "wire",
+      "funds_type": "customer",
+      "amount_usd": 250000,
+      "authorized": false,
+      "approvals_obtained": false,
+      "unauthorized_transaction": true,
+      "controls_bypassed": true,
+      "incident_status": "active",
+      "similar_incident_before": false,
+      "loss_or_liability": true
+    },
+    "requiredFactKeys": [
+      "affected_process",
+      "amount_usd",
+      "authorized",
+      "unauthorized_transaction",
+      "controls_bypassed",
+      "incident_status"
+    ],
+    "expect": {
+      "classification": "elevated_risk",
+      "ruleDriven": false,
+      "minScore": 51,
+      "maxScore": 75
+    }
+  },
+  {
+    "name": "Small internal control gap, resolved, no money moved \u2192 Risk",
+    "facts": {
+      "affected_process": "month-end close",
+      "controls_bypassed": true,
+      "authorized": true,
+      "amount_usd": 0,
+      "systems_affected": false,
+      "similar_incident_before": true,
+      "root_cause": "human_error",
+      "incident_status": "resolved"
+    },
+    "requiredFactKeys": [
+      "affected_process",
+      "controls_bypassed",
+      "authorized",
+      "amount_usd",
+      "incident_status"
+    ],
+    "expect": {
+      "classification": "risk",
+      "ruleDriven": false,
+      "minScore": 26,
+      "maxScore": 50
+    }
+  },
+  {
+    "name": "Patient safety compromised \u2192 Issue (hard rule)",
+    "facts": {
+      "patient_safety_compromised": true,
+      "injury_or_risk": true,
+      "patient_care_delayed": true,
+      "incident_cause": "equipment_failure",
+      "patients_affected": 1,
+      "incident_status": "resolved"
+    },
+    "requiredFactKeys": [
+      "patient_safety_compromised",
+      "injury_or_risk",
+      "patient_care_delayed",
+      "incident_cause",
+      "incident_status"
+    ],
+    "expect": {
+      "classification": "issue",
+      "ruleDriven": true
+    }
+  },
+  {
+    "name": "Ransomware on several servers without backups \u2192 Issue (hard rule)",
+    "facts": {
+      "attack_type": "ransomware",
+      "systems_encrypted_by_attacker": true,
+      "backups_available": false,
+      "affected_count": 12,
+      "privileged_accounts_involved": true,
+      "sensitive_data_exposed": false,
+      "incident_status": "active"
+    },
+    "requiredFactKeys": [
+      "attack_type",
+      "affected_count",
+      "privileged_accounts_involved",
+      "sensitive_data_exposed",
+      "incident_status"
+    ],
+    "expect": {
+      "classification": "issue",
+      "ruleDriven": true
+    }
+  },
+  {
+    "name": "A few encrypted records shared internally and deleted \u2192 Monitor Only",
+    "facts": {
+      "sensitive_data_exposed": true,
+      "data_encrypted": true,
+      "records_affected": 3,
+      "unauthorized_access": false,
+      "notification_required": false,
+      "incident_status": "resolved",
+      "external_parties_impacted": false
+    },
+    "requiredFactKeys": [
+      "sensitive_data_exposed",
+      "unauthorized_access",
+      "notification_required",
+      "incident_status"
+    ],
+    "expect": {
+      "classification": "monitor_only",
+      "ruleDriven": false,
+      "maxScore": 25
+    }
+  },
+  {
+    "name": "Nothing known yet \u2192 score 0 \u2192 error review, not a classification to trust",
+    "facts": {},
+    "requiredFactKeys": [
+      "affected_process"
+    ],
+    "expect": {
+      "classification": "monitor_only",
+      "ruleDriven": false,
+      "maxScore": 0
+    }
+  }
+]
