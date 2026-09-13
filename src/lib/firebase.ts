@@ -1,0 +1,40 @@
+import type { App } from 'firebase-admin/app';
+import { env } from '../config/env';
+import { AppError } from './errors';
+
+let app: App | undefined;
+
+/**
+ * Lazy Firebase Admin init: only loaded when a real token must be verified, so local dev
+ * with AUTH_DEV_BYPASS and tests never require credentials.
+ */
+async function getApp(): Promise<App> {
+  if (app) return app;
+  if (!env.FIREBASE_SERVICE_ACCOUNT_B64) {
+    throw new AppError('UNAUTHENTICATED', 'Firebase is not configured on this server');
+  }
+  const { initializeApp, cert, getApps } = await import('firebase-admin/app');
+  const json = JSON.parse(Buffer.from(env.FIREBASE_SERVICE_ACCOUNT_B64, 'base64').toString('utf8'));
+  app = getApps()[0] ?? initializeApp({ credential: cert(json), projectId: env.FIREBASE_PROJECT_ID ?? json.project_id });
+  return app;
+}
+
+export interface VerifiedToken {
+  uid: string;
+  email?: string;
+  name?: string;
+  /** Firebase sets this when the user completed a second factor. Mirrors users.mfaEnrolled (SEC-03). */
+  mfa: boolean;
+}
+
+export async function verifyIdToken(idToken: string): Promise<VerifiedToken> {
+  const { getAuth } = await import('firebase-admin/auth');
+  const a = await getApp();
+  try {
+    const decoded = await getAuth(a).verifyIdToken(idToken, true);
+    const signInSecondFactor = (decoded.firebase as { sign_in_second_factor?: string } | undefined)?.sign_in_second_factor;
+    return { uid: decoded.uid, email: decoded.email, name: decoded.name as string | undefined, mfa: Boolean(signInSecondFactor) };
+  } catch {
+    throw new AppError('UNAUTHENTICATED', 'Invalid or expired ID token');
+  }
+}

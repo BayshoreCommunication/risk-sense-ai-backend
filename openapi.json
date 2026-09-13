@@ -1,0 +1,720 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "RiskSense AI API",
+    "version": "0.1.0",
+    "description": "Generated from Zod schemas. See docs/ai/API.md."
+  },
+  "servers": [
+    {
+      "url": "/api/v1"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      },
+      "sessionId": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Session-Id"
+      }
+    },
+    "schemas": {
+      "ErrorEnvelope": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "details": {
+                "nullable": true
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          },
+          "meta": {
+            "type": "object",
+            "properties": {
+              "requestId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "requestId"
+            ]
+          }
+        },
+        "required": [
+          "error",
+          "meta"
+        ]
+      },
+      "AuthUser": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "firebaseUid": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "requestor",
+              "administrator",
+              "system_administrator",
+              "audit"
+            ]
+          },
+          "tenantId": {
+            "type": "string"
+          },
+          "departmentIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "crossDepartmentAccess": {
+            "type": "boolean"
+          },
+          "mfaEnrolled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "firebaseUid",
+          "email",
+          "name",
+          "role",
+          "tenantId",
+          "departmentIds",
+          "crossDepartmentAccess",
+          "mfaEnrolled"
+        ]
+      },
+      "AuthTenant": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "plan": {
+            "type": "string",
+            "enum": [
+              "free",
+              "paid"
+            ]
+          },
+          "features": {
+            "type": "object",
+            "properties": {
+              "sso": {
+                "type": "boolean"
+              },
+              "reviewDashboard": {
+                "type": "boolean"
+              },
+              "reports": {
+                "type": "boolean"
+              },
+              "fullAudit": {
+                "type": "boolean"
+              },
+              "departmentMapping": {
+                "type": "boolean"
+              },
+              "blockConcurrentLogin": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "sso",
+              "reviewDashboard",
+              "reports",
+              "fullAudit",
+              "departmentMapping",
+              "blockConcurrentLogin"
+            ]
+          },
+          "sessionPolicy": {
+            "type": "object",
+            "properties": {
+              "idleTimeoutMin": {
+                "type": "number"
+              },
+              "maxConcurrentSessions": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "idleTimeoutMin",
+              "maxConcurrentSessions"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "plan",
+          "features",
+          "sessionPolicy"
+        ]
+      }
+    },
+    "parameters": {}
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Service health",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string"
+                        },
+                        "db": {
+                          "type": "string"
+                        },
+                        "openai": {
+                          "type": "string"
+                        },
+                        "auth": {
+                          "type": "string"
+                        },
+                        "version": {
+                          "type": "string"
+                        },
+                        "uptimeSec": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "db",
+                        "openai",
+                        "auth",
+                        "version",
+                        "uptimeSec"
+                      ]
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/otp/request": {
+      "post": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Code emailed (devCode only outside production with the console mail provider)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "sentTo": {
+                          "type": "string"
+                        },
+                        "expiresAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "devCode": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "sentTo",
+                        "expiresAt"
+                      ]
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "OTP_RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/session": {
+      "post": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "otpCode": {
+                    "type": "string",
+                    "pattern": "^\\d{6}$"
+                  }
+                },
+                "default": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Session created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "sessionId": {
+                          "type": "string"
+                        },
+                        "expiresAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "user": {
+                          "$ref": "#/components/schemas/AuthUser"
+                        },
+                        "tenant": {
+                          "$ref": "#/components/schemas/AuthTenant"
+                        }
+                      },
+                      "required": [
+                        "sessionId",
+                        "expiresAt",
+                        "user",
+                        "tenant"
+                      ]
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED | OTP_REQUIRED | OTP_INVALID | OTP_EXPIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONCURRENT_LOGIN_BLOCKED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Logged out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "loggedOut": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "loggedOut"
+                      ]
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "user": {
+                          "$ref": "#/components/schemas/AuthUser"
+                        },
+                        "tenant": {
+                          "$ref": "#/components/schemas/AuthTenant"
+                        },
+                        "sessionId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "user",
+                        "tenant",
+                        "sessionId"
+                      ]
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audit-logs": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "auth",
+                "session",
+                "config",
+                "dataset",
+                "assessment",
+                "decision",
+                "retention",
+                "access"
+              ]
+            },
+            "required": false,
+            "name": "category",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "entityType",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "entityId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true
+            },
+            "required": false,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true
+            },
+            "required": false,
+            "name": "to",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true
+            },
+            "required": false,
+            "name": "cursorSeq",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audit entries (newest first)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": {
+                              "nullable": true
+                            }
+                          }
+                        },
+                        "nextCursorSeq": {
+                          "type": "number",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "items",
+                        "nextCursorSeq"
+                      ]
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audit-logs/verify": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Hash chain verification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "ok": {
+                          "type": "boolean"
+                        },
+                        "checked": {
+                          "type": "number"
+                        },
+                        "firstBadSeq": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "checked"
+                      ]
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
