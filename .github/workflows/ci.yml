@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main, akib]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NODE_ENV: test
+      AUTH_DEV_BYPASS: 'true'
+      MAIL_PROVIDER: console
+      MONGOMS_VERSION: 7.0.14 # mongodb-memory-server downloads this once and caches it
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Cache mongodb-memory-server binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/mongodb-binaries
+          key: mongodb-binaries-${{ runner.os }}-${{ env.MONGOMS_VERSION }}
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - name: OpenAPI is up to date
+        run: |
+          npm run openapi
+          git diff --exit-code -- openapi.json || (echo "openapi.json is stale — run 'npm run openapi' and commit" && exit 1)
+      - run: npm run build
