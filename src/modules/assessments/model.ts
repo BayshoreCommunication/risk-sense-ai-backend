@@ -86,7 +86,7 @@ const assessmentSchema = new Schema(
       overriddenTo: { type: String, enum: CLASSIFICATIONS },
       decidedAt: { type: Date },
     },
-    escalatedToUserId: { type: Schema.Types.ObjectId, ref: 'User' },
+    escalatedToUserId: { type: Schema.Types.ObjectId, ref: 'User' }, // T-061: reviewer chosen at escalation (PAID routing)
 
     timing: {
       startedAt: { type: Date, default: Date.now },
@@ -102,6 +102,8 @@ assessmentSchema.index({ tenantId: 1, status: 1, departmentId: 1, createdAt: -1 
 assessmentSchema.index({ tenantId: 1, requestorId: 1, createdAt: -1 });
 assessmentSchema.index({ tenantId: 1, personaKey: 1, createdAt: -1 }); // DASH-01 persona filter
 assessmentSchema.index({ tenantId: 1, 'result.classification': 1, createdAt: -1 }); // DASH-01 classification filter
+assessmentSchema.index({ tenantId: 1, escalatedToUserId: 1, status: 1 }); // T-061 "escalated to me"
+assessmentSchema.index({ tenantId: 1, 'result.mandatoryReview': 1, status: 1 }); // AI-03 mandatory-review queue
 
 assessmentSchema.pre('validate', function (next) {
   if (this.status === 'closed' && !(this.decision && this.decision.type && this.decision.byUserId)) {

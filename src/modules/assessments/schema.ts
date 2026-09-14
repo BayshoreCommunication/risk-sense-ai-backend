@@ -21,17 +21,21 @@ export const MessageBody = z
   .refine((b) => b.value !== undefined || (b.text && b.text.trim().length > 0), { message: 'send a value or a text' });
 export type MessageBody = z.infer<typeof MessageBody>;
 
+const OBJECT_ID = /^[a-f\d]{24}$/i;
+
 export const DecisionBody = z
   .object({
     type: z.enum(DECISION_TYPES),
     reason: z.string().max(4000).optional(),
     overriddenTo: z.enum(CLASSIFICATIONS).optional(),
+    escalateToUserId: z.string().regex(OBJECT_ID).optional(), // T-061: route the escalation to a reviewer (PAID)
   })
   .superRefine((d, ctx) => {
     if (d.type === 'override') {
       if (!d.reason || d.reason.trim().length < 25) ctx.addIssue({ code: 'custom', path: ['reason'], message: 'an override needs a documented reason of at least 25 characters (FR-23)' });
       if (!d.overriddenTo) ctx.addIssue({ code: 'custom', path: ['overriddenTo'], message: 'an override must state the new classification' });
     }
+    if (d.type !== 'escalate' && d.escalateToUserId) ctx.addIssue({ code: 'custom', path: ['escalateToUserId'], message: 'only an escalation can name a reviewer' });
   });
 export type DecisionBody = z.infer<typeof DecisionBody>;
 
@@ -49,7 +53,15 @@ export const ListQuery = z.object({
   classification: z.enum(CLASSIFICATIONS).optional(),
   personaKey: z.string().regex(KEY_REGEX).optional(),
   scenarioKey: z.string().regex(KEY_REGEX).optional(),
-  departmentId: z.string().regex(/^[a-f\d]{24}$/i).optional(),
+  departmentId: z.string().regex(OBJECT_ID).optional(),
+  mandatoryReview: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'), // AI-03: confidence below the matrix's mandatoryReviewBelow
+  escalatedToMe: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'), // T-061: escalations routed to the caller
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
   sort: z.enum(LIST_SORTS).default('pending_first'),

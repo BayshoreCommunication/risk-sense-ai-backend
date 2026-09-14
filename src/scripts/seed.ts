@@ -60,6 +60,8 @@ export async function seed() {
     { email: 'audit@dev.local', name: 'Dev Auditor', role: 'audit' as Role, tenantId: publicTenant._id },
     { email: 'requestor@paid.local', name: 'Acme Finance Requestor', role: 'requestor' as Role, tenantId: acme._id, departmentIds: [finance._id] },
     { email: 'itlead@paid.local', name: 'Acme IT Lead', role: 'requestor' as Role, tenantId: acme._id, departmentIds: [it._id] },
+    { email: 'colleague@paid.local', name: 'Acme Finance Colleague', role: 'requestor' as Role, tenantId: acme._id, departmentIds: [finance._id] }, // escalation target (T-061)
+    { email: 'admin@paid.local', name: 'Acme Administrator', role: 'administrator' as Role, tenantId: acme._id, mfaEnrolled: true }, // sees the PAID tenant's review queue (AI-03)
   ];
   for (const u of users) await upsertUser(u);
 

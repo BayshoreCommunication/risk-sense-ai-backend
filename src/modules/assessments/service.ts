@@ -3,6 +3,7 @@ import { AppError, notFound } from '../../lib/errors';
 import type { AuthTenant, AuthUser } from '../../middleware/auth';
 import { getAi } from '../ai/service';
 import { audit } from '../audit/service';
+import { UserModel } from '../users/model';
 import { rulesService } from '../rules/service';
 import { simulate, type MatrixLike } from '../scoring/compute';
 import { scoringService } from '../scoring/service';
@@ -53,7 +54,8 @@ async function loadFor(user: AuthUser, id: string): Promise<Doc> {
   if (!doc) throw notFound('assessment');
   const own = String(doc.requestorId) === user.id;
   const sameDept = doc.departmentId && user.departmentIds.includes(String(doc.departmentId));
-  if (user.role === 'requestor' && !own && !sameDept && !user.crossDepartmentAccess) throw new AppError('FORBIDDEN', 'not your assessment');
+  const escalatee = doc.escalatedToUserId && String(doc.escalatedToUserId) === user.id; // T-061
+  if (user.role === 'requestor' && !own && !sameDept && !escalatee && !user.crossDepartmentAccess) throw new AppError('FORBIDDEN', 'not your assessment');
   return doc;
 }
 
@@ -95,6 +97,22 @@ async function advance(doc: Doc, ctx: Awaited<ReturnType<typeof flowContext>>) {
   doc.timing!.intakeCompletedAt = new Date();
   await say(doc, 'assistant', 'info', 'Thank you — I have everything I need. Submit the assessment to get the result.');
   return { nextQuestion: null, intakeComplete: true, missingRequired: missing };
+}
+
+/**
+ * T-061 escalation routing (PAID `reviewDashboard`): who may receive this assessment. Requestors of the same
+ * tenant who either share the assessment's department or hold cross-department access; never the caller.
+ * Administrators are content owners (TAC), not decision makers, so they are not targets (Overview.md roles).
+ */
+async function escalationCandidates(user: AuthUser, tenant: AuthTenant, doc: Doc) {
+  if (!tenant.features.reviewDashboard) return [];
+  const reach: Record<string, unknown>[] = [{ crossDepartmentAccess: true }];
+  if (doc.departmentId) reach.push({ departmentIds: doc.departmentId });
+  const users = await UserModel.find({ tenantId: user.tenantId, role: 'requestor', status: 'active', _id: { $ne: user.id }, $or: reach })
+    .sort({ name: 1 })
+    .select('name email departmentIds crossDepartmentAccess')
+    .lean();
+  return users.map((u) => ({ _id: String(u._id), name: u.name, email: u.email, departmentIds: u.departmentIds.map(String), crossDepartmentAccess: u.crossDepartmentAccess }));
 }
 
 export const assessmentsService = {
@@ -362,9 +380,16 @@ export const assessmentsService = {
     if (!['awaiting_decision', 'escalated', 'error_review'].includes(doc.status)) throw new AppError('CONFLICT', `assessment is ${doc.status}`);
     if (doc.status === 'error_review' && body.type === 'accept') throw new AppError('DECISION_REQUIRED', 'a score of 0 cannot be accepted; override with a classification or escalate (FR-18)');
     doc.decision = { type: body.type, byUserId: new Types.ObjectId(user.id), reason: body.reason?.trim(), overriddenTo: body.overriddenTo, decidedAt: new Date() } as never;
+    let target: { _id: string; name: string } | undefined;
     if (body.type === 'escalate') {
+      if (body.escalateToUserId) {
+        if (!tenant.features.reviewDashboard) throw new AppError('FEATURE_DISABLED', 'escalation routing is a PAID feature; escalate without a reviewer instead');
+        target = (await escalationCandidates(user, tenant, doc)).find((c) => c._id === body.escalateToUserId);
+        if (!target) throw new AppError('VALIDATION_ERROR', 'the chosen reviewer cannot receive this assessment (not in its department, or no cross-department access)', { field: 'escalateToUserId' });
+      }
+      doc.escalatedToUserId = target ? new Types.ObjectId(target._id) : undefined;
       doc.status = 'escalated';
-      await say(doc, 'user', 'decision', `Escalated${body.reason ? `: ${body.reason}` : ''}`);
+      await say(doc, 'user', 'decision', `Escalated${target ? ` to ${target.name}` : ''}${body.reason ? `: ${body.reason}` : ''}`);
     } else {
       doc.status = 'closed';
       doc.timing!.closedAt = new Date();
@@ -378,9 +403,15 @@ export const assessmentsService = {
       action: 'decision.recorded',
       actor: user,
       entity: { type: 'assessment', id },
-      payload: { type: body.type, overriddenTo: body.overriddenTo ?? null, aiClassification: doc.result?.classification ?? null, ...(tenant.features.fullAudit ? { reason: body.reason ?? null } : {}) },
+      payload: { type: body.type, overriddenTo: body.overriddenTo ?? null, escalatedToUserId: target?._id ?? null, aiClassification: doc.result?.classification ?? null, ...(tenant.features.fullAudit ? { reason: body.reason ?? null } : {}) },
     });
     return this.view(doc);
+  },
+
+  /** T-061: reviewers the caller may escalate this assessment to (empty on FREE tenants). */
+  async escalationTargets(user: AuthUser, tenant: AuthTenant, id: string) {
+    const doc = await loadFor(user, id);
+    return escalationCandidates(user, tenant, doc);
   },
 
   async get(user: AuthUser, id: string) {
@@ -402,12 +433,13 @@ export const assessmentsService = {
   async list(user: AuthUser, tenant: AuthTenant, q: ListQuery) {
     const scope: Record<string, unknown> = { tenantId: new Types.ObjectId(user.tenantId) };
     if (user.role === 'requestor') {
-      const own = { requestorId: new Types.ObjectId(user.id) };
+      const me = new Types.ObjectId(user.id);
+      const mine: Record<string, unknown>[] = [{ requestorId: me }, { escalatedToUserId: me }]; // own + routed to me (T-061)
       if (tenant.features.reviewDashboard && user.crossDepartmentAccess) {
         // whole tenant
       } else if (tenant.features.reviewDashboard && user.departmentIds.length) {
-        scope.$or = [own, { departmentId: { $in: user.departmentIds.map((d) => new Types.ObjectId(d)) } }];
-      } else Object.assign(scope, own);
+        scope.$or = [...mine, { departmentId: { $in: user.departmentIds.map((d) => new Types.ObjectId(d)) } }];
+      } else scope.$or = mine;
     }
     // Everything except the status dimension — the tab counts are computed on this.
     const base: Record<string, unknown> = { ...scope };
@@ -415,6 +447,8 @@ export const assessmentsService = {
     if (q.personaKey) base.personaKey = q.personaKey;
     if (q.scenarioKey) base.scenarioKey = q.scenarioKey;
     if (q.departmentId) base.departmentId = new Types.ObjectId(q.departmentId);
+    if (q.mandatoryReview) base['result.mandatoryReview'] = true;
+    if (q.escalatedToMe) base.escalatedToUserId = new Types.ObjectId(user.id);
     if (q.from || q.to) base.createdAt = { ...(q.from ? { $gte: q.from } : {}), ...(q.to ? { $lte: q.to } : {}) };
     const filter: Record<string, unknown> = { ...base };
     if (q.status) filter.status = q.status;
@@ -429,8 +463,10 @@ export const assessmentsService = {
       { $limit: q.limit },
       { $lookup: { from: 'users', localField: 'requestorId', foreignField: '_id', as: 'requestor' } },
       { $lookup: { from: 'departments', localField: 'departmentId', foreignField: '_id', as: 'department' } },
+      { $lookup: { from: 'users', localField: 'escalatedToUserId', foreignField: '_id', as: 'escalatedTo' } },
       { $unwind: { path: '$requestor', preserveNullAndEmptyArrays: true } },
       { $unwind: { path: '$department', preserveNullAndEmptyArrays: true } },
+      { $unwind: { path: '$escalatedTo', preserveNullAndEmptyArrays: true } },
       {
         // List rows carry what the dashboard shows (class, confidence, explanation, action — FR-21) and nothing
         // heavier: no answers/facts/queue, no factor breakdown, no other user fields (PII stays minimal).
@@ -459,6 +495,8 @@ export const assessmentsService = {
           'requestor.name': 1,
           'requestor.email': 1,
           'department.name': 1,
+          escalatedToUserId: 1,
+          'escalatedTo.name': 1,
         },
       },
     ];
@@ -482,6 +520,7 @@ export const assessmentsService = {
 
   async view(doc: Doc) {
     const o = doc.toObject();
+    const escalatedTo = o.escalatedToUserId ? await UserModel.findById(o.escalatedToUserId).select('name').lean() : null;
     return {
       _id: String(o._id),
       status: o.status,
@@ -497,6 +536,7 @@ export const assessmentsService = {
       facts: o.facts,
       result: o.result?.computedAt ? o.result : null,
       decision: o.decision?.type ? o.decision : null,
+      escalatedTo: escalatedTo ? { _id: String(escalatedTo._id), name: escalatedTo.name } : null,
       timing: o.timing,
       versions: o.versions,
       createdAt: o.createdAt,

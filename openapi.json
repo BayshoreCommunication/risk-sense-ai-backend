@@ -299,6 +299,36 @@
         "additionalProperties": {
           "nullable": true
         }
+      },
+      "EscalationTarget": {
+        "type": "object",
+        "properties": {
+          "_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "departmentIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "crossDepartmentAccess": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "_id",
+          "name",
+          "email",
+          "departmentIds",
+          "crossDepartmentAccess"
+        ]
       }
     },
     "parameters": {}
@@ -21314,6 +21344,30 @@
           {
             "schema": {
               "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "required": false,
+            "name": "mandatoryReview",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "required": false,
+            "name": "escalatedToMe",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
               "nullable": true
             },
             "required": false,
@@ -21799,6 +21853,61 @@
         }
       }
     },
+    "/assessments/{id}/escalation-targets": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Reviewers the caller may escalate to (T-061; empty on FREE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/EscalationTarget"
+                      }
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/assessments/{id}/decision": {
       "post": {
         "security": [
@@ -21843,6 +21952,10 @@
                       "elevated_risk",
                       "issue"
                     ]
+                  },
+                  "escalateToUserId": {
+                    "type": "string",
+                    "pattern": "^[a-f\\d]{24}$"
                   }
                 },
                 "required": [
