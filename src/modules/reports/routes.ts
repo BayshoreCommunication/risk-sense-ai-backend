@@ -4,6 +4,7 @@ import { authenticate } from '../../middleware/auth';
 import { requireFeature, requireRole } from '../../middleware/rbac';
 import { requireSession } from '../../middleware/session';
 import { validate } from '../../middleware/validate';
+import { isPrivilegedReader, maskText } from '../../lib/sensitive';
 import { audit } from '../audit/service';
 import { toCsv, toPdf } from './export';
 import { ExportQuery, ReportParams, ReportQuery, TrendsQuery, type ReportType } from './schema';
@@ -18,7 +19,15 @@ for (const r of [reportsRouter, analyticsRouter]) r.use(authenticate, requireSes
 const TITLES: Record<ReportType, string> = { volume: 'Assessment volume', classification: 'Classification distribution', 'override-rate': 'Override rate', 'assessment-time': 'Average assessment time' };
 
 reportsRouter.get('/:type', validate({ params: ReportParams, query: ReportQuery }), async (req, res) => {
-  ok(res, await reportsService.report(req.user!, req.tenant!, (req.params as { type: ReportType }).type, req.query as unknown as ReportQuery));
+  const type = (req.params as { type: ReportType }).type;
+  const q = req.query as unknown as ReportQuery;
+  const report = await reportsService.report(req.user!, req.tenant!, type, q);
+  // SEC-05: override reasons are free text (FR-23). Privileged readers see them masked unless they unmask (audited).
+  if (type === 'override-rate' && typeof report.summary.reasons === 'string' && isPrivilegedReader(req.user!)) {
+    if (q.unmask) await audit.write({ tenantId: req.user!.tenantId, category: 'access', action: 'access.unmasked', actor: req.user!, entity: { type: 'report', id: type }, payload: { what: 'override reasons', params: report.params } });
+    else report.summary.reasons = JSON.stringify((JSON.parse(report.summary.reasons) as { reason: string | null }[]).map((r) => ({ ...r, reason: maskText(r.reason) })));
+  }
+  ok(res, report);
 });
 
 /** FR-28: CSV/PDF of exactly what the screen shows. Exports are audited (SEC-05: who took data out, and what). */

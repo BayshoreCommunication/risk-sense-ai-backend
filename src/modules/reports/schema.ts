@@ -22,6 +22,10 @@ export const ReportQuery = z
       .enum(['true', 'false'])
       .optional()
       .transform((v) => v === 'true'), // bypass the 1 h cache
+    unmask: z
+      .enum(['true', 'false'])
+      .optional()
+      .transform((v) => v === 'true'), // SEC-05: clear override reasons for privileged readers (audited)
   })
   .refine((q) => !(q.from && q.to) || q.from <= q.to, { message: 'from must be before to' });
 export type ReportQuery = z.infer<typeof ReportQuery>;

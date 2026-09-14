@@ -2,6 +2,7 @@ import { createApp } from './app';
 import { env } from './config/env';
 import { connectDb, disconnectDb } from './lib/db';
 import { logger } from './lib/logger';
+import { startScheduler, stopScheduler } from './jobs/scheduler';
 
 async function main() {
   await connectDb();
@@ -9,9 +10,11 @@ async function main() {
   const server = app.listen(env.PORT, () => {
     logger.info({ port: env.PORT, env: env.NODE_ENV }, 'risk-sense-ai-backend listening');
   });
+  startScheduler();
 
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'shutting down');
+    stopScheduler();
     server.close(async () => {
       await disconnectDb();
       process.exit(0);

@@ -10,6 +10,7 @@ import { TENANT_PLANS } from '../modules/tenants/model';
 import { ListAuditQuery } from '../modules/audit/routes';
 import { CreateSessionBody, SsoLookupQuery } from '../modules/auth/routes';
 import { TenantPatch } from '../modules/system/schema';
+import { RunBody as RetentionRunBody } from '../modules/retention/routes';
 import { PersonaBody, PersonaListQuery, PersonaPatch } from '../modules/personas/schema';
 import { ScenarioBody, ScenarioListQuery, ScenarioPatch } from '../modules/scenarios/schema';
 import { QuestionBody, QuestionListQuery, QuestionPatch } from '../modules/questions/schema';
@@ -17,7 +18,7 @@ import { JsonUploadBody } from '../modules/datasets/routes';
 import { RuleBody, RuleListQuery, RulePatch, ApproveBody as RuleApproveBody } from '../modules/rules/schema';
 import { MatrixBody, MatrixListQuery, MatrixPatch, SimulateBody } from '../modules/scoring/schema';
 import { ExportQuery, ReportParams, ReportQuery, TrendsQuery } from '../modules/reports/schema';
-import { DecisionBody, ListQuery as AssessmentListQuery, MessageBody, PersonaBody as AssessmentPersonaBody, StartBody } from '../modules/assessments/schema';
+import { DecisionBody, ListQuery as AssessmentListQuery, MessageBody, PersonaBody as AssessmentPersonaBody, StartBody, UnmaskQuery } from '../modules/assessments/schema';
 
 extendZodWithOpenApi(z);
 const registry = new OpenAPIRegistry();
@@ -224,12 +225,12 @@ const AssessmentListItem = Any.openapi('AssessmentListItem'); // list row: statu
 const AssessmentCounts = z.object({ in_progress: z.number(), intake_complete: z.number(), awaiting_decision: z.number(), escalated: z.number(), closed: z.number(), error_review: z.number(), pending: z.number(), all: z.number() }).openapi('AssessmentCounts');
 registry.registerPath({ method: 'get', path: '/assessments', security: secured, request: { query: AssessmentListQuery }, responses: { 200: { description: 'Review dashboard (DASH-01): scoped, filtered, paginated; counts per status within the non-status filters', content: { 'application/json': { schema: Envelope(z.object({ items: z.array(AssessmentListItem), total: z.number(), page: z.number(), limit: z.number(), pages: z.number(), counts: AssessmentCounts })) } } } } });
 registry.registerPath({ method: 'get', path: '/departments', security: secured, responses: { 200: { description: "The caller's tenant departments (filter lookup; FR-10)", content: { 'application/json': { schema: Envelope(z.array(z.object({ _id: z.string(), name: z.string(), personaIds: z.array(z.string()) }).openapi('Department'))) } } } } });
-registry.registerPath({ method: 'get', path: '/assessments/{id}', security: secured, request: { params: idp }, responses: { 200: { description: 'Assessment', content: { 'application/json': { schema: Envelope(Assessment) } } } } });
-registry.registerPath({ method: 'get', path: '/assessments/{id}/messages', security: secured, request: { params: idp }, responses: { 200: { description: 'Transcript', content: { 'application/json': { schema: Envelope(z.array(Any)) } } } } });
+registry.registerPath({ method: 'get', path: '/assessments/{id}', security: secured, request: { params: idp, query: UnmaskQuery }, responses: { 200: { description: 'Assessment', content: { 'application/json': { schema: Envelope(Assessment) } } } } });
+registry.registerPath({ method: 'get', path: '/assessments/{id}/messages', security: secured, request: { params: idp, query: UnmaskQuery }, responses: { 200: { description: 'Transcript', content: { 'application/json': { schema: Envelope(z.array(Any)) } } } } });
 registry.registerPath({ method: 'post', path: '/assessments/{id}/persona', security: secured, request: { params: idp, body: { content: { 'application/json': { schema: AssessmentPersonaBody } } } }, responses: { 200: { description: 'Persona set/overridden', content: { 'application/json': { schema: Envelope(Turn) } } } } });
 registry.registerPath({ method: 'post', path: '/assessments/{id}/messages', security: secured, request: { params: idp, body: { content: { 'application/json': { schema: MessageBody } } } }, responses: { 200: { description: 'Answer recorded; next question or intakeComplete', content: { 'application/json': { schema: Envelope(Turn) } } } } });
 registry.registerPath({ method: 'post', path: '/assessments/{id}/submit', security: secured, request: { params: idp }, responses: { 200: { description: 'Result computed (rules → scoring → explanation)', content: { 'application/json': { schema: Envelope(Assessment) } } }, 422: { description: 'MISSING_REQUIRED_FACTS', content: { 'application/json': { schema: ErrorEnvelope } } } } });
-registry.registerPath({ method: 'get', path: '/assessments/{id}/reconstruct', security: secured, request: { params: idp }, responses: { 200: { description: 'FR-26: lifecycle rebuilt from the audit log (timeline, state, completeness, integrity, conformance)', content: { 'application/json': { schema: Envelope(Any.openapi('AssessmentReconstruction')) } } } } });
+registry.registerPath({ method: 'get', path: '/assessments/{id}/reconstruct', security: secured, request: { params: idp, query: UnmaskQuery }, responses: { 200: { description: 'FR-26: lifecycle rebuilt from the audit log (timeline, state, completeness, integrity, conformance)', content: { 'application/json': { schema: Envelope(Any.openapi('AssessmentReconstruction')) } } } } });
 registry.registerPath({ method: 'get', path: '/assessments/{id}/escalation-targets', security: secured, request: { params: idp }, responses: { 200: { description: 'Reviewers the caller may escalate to (T-061; empty on FREE)', content: { 'application/json': { schema: Envelope(z.array(z.object({ _id: z.string(), name: z.string(), email: z.string(), departmentIds: z.array(z.string()), crossDepartmentAccess: z.boolean() }).openapi('EscalationTarget'))) } } } } });
 registry.registerPath({ method: 'post', path: '/assessments/{id}/decision', security: secured, request: { params: idp, body: { content: { 'application/json': { schema: DecisionBody } } } }, responses: { 200: { description: 'Decision recorded; closed or escalated', content: { 'application/json': { schema: Envelope(Assessment) } } } } });
 
@@ -242,6 +243,10 @@ registry.registerPath({ method: 'get', path: '/auth/sso/lookup', request: { quer
 const TenantSettings = z.object({ _id: z.string(), name: z.string(), slug: z.string(), plan: z.enum(TENANT_PLANS), features: AuthTenant.shape.features, sso: z.object({ providerId: z.string().nullable(), domain: z.string().nullable() }), authPolicy: z.object({ otpRequired: z.boolean() }), sessionPolicy: z.object({ idleTimeoutMin: z.number(), maxConcurrentSessions: z.number() }), retentionPolicy: z.object({ assessmentDays: z.number(), auditDays: z.number(), evidenceDays: z.number(), datasetHistoryDays: z.number() }), updatedAt: z.string().optional() }).openapi('TenantSettings');
 registry.registerPath({ method: 'get', path: '/system/tenant', security: secured, responses: { 200: { description: 'Tenant settings (system_administrator)', content: { 'application/json': { schema: Envelope(TenantSettings) } } } } });
 registry.registerPath({ method: 'patch', path: '/system/tenant', security: secured, request: { body: { content: { 'application/json': { schema: TenantPatch } } } }, responses: { 200: { description: 'Updated settings; audited as config/tenant.updated', content: { 'application/json': { schema: Envelope(TenantSettings) } } } } });
+
+const RetentionRunResult = z.object({ tenantId: z.string(), slug: z.string(), plan: z.string(), dryRun: z.boolean(), policy: z.object({ assessmentDays: z.number(), auditDays: z.number(), graceDays: z.number() }), flagged: z.number(), reduced: z.number(), archived: z.number(), messagesRemoved: z.number(), auditPastRetention: z.number(), durationMs: z.number() }).openapi('RetentionRunResult');
+registry.registerPath({ method: 'post', path: '/system/retention/run', security: secured, request: { body: { content: { 'application/json': { schema: RetentionRunBody } } } }, responses: { 200: { description: 'SEC-06: run retention for the tenant (dryRun default true); audited retention.*', content: { 'application/json': { schema: Envelope(RetentionRunResult) } } } } });
+registry.registerPath({ method: 'get', path: '/system/retention/runs', security: secured, responses: { 200: { description: 'Last 30 retention runs (retentionRuns)', content: { 'application/json': { schema: Envelope(z.array(RetentionRunResult.extend({ _id: z.string(), ranAt: z.string(), trigger: z.string(), error: z.string().optional() }))) } } } } });
 
 const doc = new OpenApiGeneratorV3(registry.definitions).generateDocument({
   openapi: '3.0.3',

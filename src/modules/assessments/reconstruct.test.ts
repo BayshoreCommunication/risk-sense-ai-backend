@@ -44,7 +44,7 @@ describe('reconstruction from the audit log [FR-26, FR-30, SEC-07]', () => {
     await request(app).post(`/api/v1/assessments/${id}/decision`).set(req).send({ type: 'override', overriddenTo: 'issue', reason: 'Treasury confirmed the wire was fraudulent.' });
 
     expect((await request(app).get(`/api/v1/assessments/${id}/reconstruct`).set(req)).status).toBe(403); // requestors do not audit
-    const res = await request(app).get(`/api/v1/assessments/${id}/reconstruct`).set(await login('admin@paid.local'));
+    const res = await request(app).get(`/api/v1/assessments/${id}/reconstruct`).set(await login('admin@paid.local')).query({ unmask: 'true' }); // SEC-05: clear values for the comparison (audited)
     expect(res.status).toBe(200);
     const r = res.body.data;
     expect(r.completeness).toBe('full');
@@ -72,7 +72,7 @@ describe('reconstruction from the audit log [FR-26, FR-30, SEC-07]', () => {
     const doc = (await AssessmentModel.findById(id).lean())!;
     const firstFact = doc.facts[0]!.key;
     await mongoose.connection.db!.collection('assessments').updateOne({ _id: doc._id }, { $set: { 'facts.0.value': 'tampered', 'result.score': 99 } });
-    const r = (await request(app).get(`/api/v1/assessments/${id}/reconstruct`).set(auditor)).body.data;
+    const r = (await request(app).get(`/api/v1/assessments/${id}/reconstruct`).set(auditor).query({ unmask: 'true' })).body.data;
     expect(r.integrity.ok).toBe(true); // the log itself is intact
     expect(r.conformance.matches).toBe(false);
     expect(r.conformance.differences.map((d: { field: string }) => d.field).sort()).toEqual([`facts.${firstFact}`, 'result.score'].sort());
@@ -85,7 +85,7 @@ describe('reconstruction from the audit log [FR-26, FR-30, SEC-07]', () => {
     const auditor = await login('admin@paid.local');
     const scored = await mongoose.connection.db!.collection('auditLogs').findOne({ action: 'assessment.scored', 'entity.id': id });
     await mongoose.connection.db!.collection('auditLogs').updateOne({ _id: scored!._id }, { $set: { 'payload.score': 1 } });
-    const r = (await request(app).get(`/api/v1/assessments/${id}/reconstruct`).set(auditor)).body.data;
+    const r = (await request(app).get(`/api/v1/assessments/${id}/reconstruct`).set(auditor).query({ unmask: 'true' })).body.data;
     expect(r.integrity).toMatchObject({ ok: false, badSeqs: [scored!.seq] });
     expect(r.state.score).toBe(1); // the rebuilt state follows the (tampered) log; integrity says not to trust it
     expect(r.conformance.matches).toBe(false);

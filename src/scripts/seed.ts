@@ -9,10 +9,10 @@ import { logger } from '../lib/logger';
 import { DepartmentModel, PUBLIC_TENANT_SLUG, TenantModel } from '../modules/tenants/model';
 import { UserModel, type Role } from '../modules/users/model';
 
-async function upsertTenant(input: { name: string; slug: string; plan: 'free' | 'paid'; features?: Record<string, boolean>; sectors?: string[] }) {
+async function upsertTenant(input: { name: string; slug: string; plan: 'free' | 'paid'; features?: Record<string, boolean>; sectors?: string[]; retentionPolicy?: Record<string, number> }) {
   return TenantModel.findOneAndUpdate(
     { slug: input.slug },
-    { $set: { name: input.name, plan: input.plan, features: input.features ?? {}, sectors: input.sectors ?? [] } },
+    { $set: { name: input.name, plan: input.plan, features: input.features ?? {}, sectors: input.sectors ?? [], ...(input.retentionPolicy ? { retentionPolicy: input.retentionPolicy } : {}) } },
     { upsert: true, new: true, setDefaultsOnInsert: true },
   );
 }
@@ -43,6 +43,7 @@ export async function seed() {
     plan: 'paid',
     sectors: ['financial'],
     features: { sso: true, reviewDashboard: true, reports: true, fullAudit: true, departmentMapping: true, blockConcurrentLogin: false },
+    retentionPolicy: { assessmentDays: 365 * 7, auditDays: 365 * 7, evidenceDays: 365 * 7, datasetHistoryDays: 365 * 10 }, // BusinessRules §12 #3 (PAID: 7 years)
   });
 
   const finance = await DepartmentModel.findOneAndUpdate(

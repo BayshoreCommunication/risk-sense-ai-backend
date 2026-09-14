@@ -4,6 +4,7 @@ import type { AuthTenant, AuthUser } from '../../middleware/auth';
 import { getAi } from '../ai/service';
 import { audit } from '../audit/service';
 import { UserModel } from '../users/model';
+import { classFor as classForSector, isPrivilegedReader, maskAssessmentView, maskMessages, maskText } from '../../lib/sensitive';
 import { rulesService } from '../rules/service';
 import { simulate, type MatrixLike } from '../scoring/compute';
 import { scoringService } from '../scoring/service';
@@ -58,6 +59,17 @@ async function loadFor(user: AuthUser, id: string): Promise<Doc> {
   const escalatee = doc.escalatedToUserId && String(doc.escalatedToUserId) === user.id; // T-061
   if (user.role === 'requestor' && !own && !sameDept && !escalatee && !user.crossDepartmentAccess) throw new AppError('FORBIDDEN', 'not your assessment');
   return doc;
+}
+
+/**
+ * SEC-05: privileged readers (administrator / system_administrator / audit) get masked free text unless they
+ * pass `unmask=true`, which is audited as `access.unmasked`. Acting requestors always see the clear values.
+ */
+async function unmaskGate(user: AuthUser, doc: Doc, unmask: boolean, what: string): Promise<boolean> {
+  if (!isPrivilegedReader(user)) return true;
+  if (!unmask) return false;
+  await audit.write({ tenantId: user.tenantId, category: 'access', action: 'access.unmasked', actor: user, entity: { type: 'assessment', id: String(doc._id) }, payload: { what, sector: doc.sector ?? null } });
+  return true;
 }
 
 async function flowContext(doc: Doc) {
@@ -413,9 +425,11 @@ export const assessmentsService = {
    * T-063 / FR-26: rebuild the lifecycle from the audit log alone, check each entry's hash, and compare the
    * rebuilt state with the stored document (FR-30 conformance). Readers: administrator, system_administrator, audit.
    */
-  async reconstructFromAudit(user: AuthUser, tenant: AuthTenant, id: string) {
+  async reconstructFromAudit(user: AuthUser, tenant: AuthTenant, id: string, unmask = false) {
     const doc = await loadFor(user, id);
-    const entries = await audit.forEntity(user.tenantId, 'assessment', id);
+    const clear = await unmaskGate(user, doc, unmask, 'reconstruction');
+    // Lifecycle categories only: access events (e.g. this very unmask) are not part of what happened to the assessment.
+    const entries = await audit.forEntity(user.tenantId, 'assessment', id, ['assessment', 'decision', 'retention']);
     const integrity = audit.verifyEntries(entries as never);
     const r = reconstruct(entries as never);
     const differences: { field: string; fromAudit: unknown; stored: unknown }[] = [];
@@ -435,6 +449,16 @@ export const assessmentsService = {
       for (const [k, v] of Object.entries(r.state.facts)) cmp(`facts.${k}`, v, stored[k]);
       for (const k of Object.keys(stored)) if (!(k in r.state.facts)) differences.push({ field: `facts.${k}`, fromAudit: null, stored: stored[k] });
     }
+    const state = clear
+      ? r.state
+      : {
+          ...r.state,
+          openingText: maskText(r.state.openingText) as string | null,
+          answers: r.state.answers.map((a) => ({ ...a, answer: typeof a.answer === 'string' && a.answer.length > 24 ? maskText(a.answer) : a.answer })),
+          facts: Object.fromEntries(Object.entries(r.state.facts).map(([k, v]) => [k, typeof v === 'string' && v.length > 24 ? maskText(v) : v])),
+          decisions: r.state.decisions.map((d) => ({ ...d, reason: maskText(d.reason) as string | null })),
+        };
+    const timeline = clear ? r.timeline : r.timeline.map((t) => ({ ...t, detail: {} as Record<string, unknown>, summary: t.action === 'assessment.answered' ? `Answered ${String((t.detail as { questionKey?: string }).questionKey ?? '?')}` : t.summary }));
     return {
       assessmentId: id,
       plan: tenant.plan,
@@ -443,9 +467,10 @@ export const assessmentsService = {
       integrity,
       completeness: r.completeness,
       missing: r.missing,
-      timeline: r.timeline,
-      state: r.state,
-      conformance: { matches: differences.length === 0, differences },
+      masked: clear ? null : classForSector(doc.sector),
+      timeline,
+      state,
+      conformance: { matches: differences.length === 0, differences: clear ? differences : differences.map((d) => ({ ...d, fromAudit: typeof d.fromAudit === 'string' ? maskText(d.fromAudit) : d.fromAudit, stored: typeof d.stored === 'string' ? maskText(d.stored) : d.stored })) },
     };
   },
 
@@ -455,13 +480,16 @@ export const assessmentsService = {
     return escalationCandidates(user, tenant, doc);
   },
 
-  async get(user: AuthUser, id: string) {
-    return this.view(await loadFor(user, id));
+  async get(user: AuthUser, id: string, unmask = false) {
+    const doc = await loadFor(user, id);
+    const v = await this.view(doc);
+    return (await unmaskGate(user, doc, unmask, 'assessment')) ? { ...v, masked: null } : maskAssessmentView(v, doc.sector);
   },
 
-  async messages(user: AuthUser, id: string) {
+  async messages(user: AuthUser, id: string, unmask = false) {
     const doc = await loadFor(user, id);
-    return AssessmentMessageModel.find({ assessmentId: doc._id }).sort({ createdAt: 1, _id: 1 }).lean();
+    const msgs = await AssessmentMessageModel.find({ assessmentId: doc._id }).sort({ createdAt: 1, _id: 1 }).lean();
+    return (await unmaskGate(user, doc, unmask, 'messages')) ? msgs : maskMessages(msgs, doc.sector);
   },
 
   /**
@@ -549,8 +577,14 @@ export const assessmentsService = {
     const byStatus = Object.fromEntries(ASSESSMENT_STATUSES.map((s) => [s, 0])) as Record<AssessmentStatus, number>;
     for (const g of grouped) byStatus[g._id as AssessmentStatus] = g.n;
     const counts = { ...byStatus, pending: PENDING_STATUSES.reduce((n, s) => n + byStatus[s], 0), all: grouped.reduce((n, g) => n + g.n, 0) };
+    const privileged = isPrivilegedReader(user);
     return {
-      items: items.map((it) => ({ ...it, result: it.result?.computedAt ? it.result : null, decision: it.decision?.type ? it.decision : null })),
+      items: items.map((it) => ({
+        ...it,
+        result: it.result?.computedAt ? it.result : null,
+        decision: it.decision?.type ? it.decision : null,
+        ...(privileged && it.requestor?.email ? { requestor: { ...it.requestor, email: maskText(it.requestor.email) } } : {}),
+      })),
       total,
       page: q.page,
       limit: q.limit,
@@ -574,6 +608,8 @@ export const assessmentsService = {
       sector: o.sector,
       currentQuestionKey: o.currentQuestionKey,
       clarification: o.clarification,
+      openingText: o.openingText ?? null,
+      answers: o.answers,
       facts: o.facts,
       result: o.result?.computedAt ? o.result : null,
       decision: o.decision?.type ? o.decision : null,

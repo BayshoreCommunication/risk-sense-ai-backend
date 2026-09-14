@@ -20,7 +20,8 @@
     "audit:verify": "tsx src/scripts/verify-audit.ts",
     "templates": "tsx src/scripts/build-templates.ts",
     "seed:content": "tsx src/scripts/seed-content.ts",
-    "seed:demo": "tsx src/scripts/seed-demo.ts"
+    "seed:demo": "tsx src/scripts/seed-demo.ts",
+    "retention": "tsx src/scripts/retention.ts"
   },
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "^7.3.0",

@@ -32,6 +32,12 @@ const schema = z
     SMTP_URL: z.string().optional(),
 
     CORS_ORIGINS: z.string().default('http://localhost:3000'),
+    // Nightly in-process jobs (retention SEC-06, audit verify SEC-07). Off by default; a Render Cron Job may call the scripts instead.
+    JOBS_ENABLED: z
+      .string()
+      .optional()
+      .transform((v) => v === 'true' || v === '1'),
+    JOBS_RETENTION_HOUR: z.coerce.number().int().min(0).max(23).default(2),
     LOG_LEVEL: z.enum(['silent', 'fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   })
   .superRefine((v, ctx) => {

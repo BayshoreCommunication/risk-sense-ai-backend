@@ -88,6 +88,14 @@ const assessmentSchema = new Schema(
     },
     escalatedToUserId: { type: Schema.Types.ObjectId, ref: 'User' }, // T-061: reviewer chosen at escalation (PAID routing)
 
+    // SEC-06 / Section 5: retention state. Flagged first (grace period), then reduced (FREE) or archived + reduced (PAID).
+    retention: {
+      flaggedAt: { type: Date },
+      enforcedAt: { type: Date },
+      mode: { type: String, enum: ['reduced', 'archived'] },
+      reason: { type: String },
+    },
+
     timing: {
       startedAt: { type: Date, default: Date.now },
       intakeCompletedAt: { type: Date },
@@ -104,6 +112,7 @@ assessmentSchema.index({ tenantId: 1, personaKey: 1, createdAt: -1 }); // DASH-0
 assessmentSchema.index({ tenantId: 1, 'result.classification': 1, createdAt: -1 }); // DASH-01 classification filter
 assessmentSchema.index({ tenantId: 1, escalatedToUserId: 1, status: 1 }); // T-061 "escalated to me"
 assessmentSchema.index({ tenantId: 1, 'result.mandatoryReview': 1, status: 1 }); // AI-03 mandatory-review queue
+assessmentSchema.index({ tenantId: 1, createdAt: 1, 'retention.enforcedAt': 1 }); // SEC-06 retention sweep
 
 assessmentSchema.pre('validate', function (next) {
   if (this.status === 'closed' && !(this.decision && this.decision.type && this.decision.byUserId)) {

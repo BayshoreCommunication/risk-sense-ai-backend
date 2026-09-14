@@ -4,7 +4,7 @@ import { authenticate } from '../../middleware/auth';
 import { requireRole } from '../../middleware/rbac';
 import { requireSession } from '../../middleware/session';
 import { validate } from '../../middleware/validate';
-import { DecisionBody, IdParams, ListQuery, MessageBody, PersonaBody, StartBody } from './schema';
+import { DecisionBody, IdParams, ListQuery, MessageBody, PersonaBody, StartBody, UnmaskQuery } from './schema';
 import { assessmentsService } from './service';
 
 export const assessmentsRouter = Router();
@@ -22,12 +22,14 @@ assessmentsRouter.get('/', READERS, validate({ query: ListQuery }), async (req, 
   ok(res, await assessmentsService.list(req.user!, req.tenant!, req.query as unknown as ListQuery));
 });
 
-assessmentsRouter.get('/:id', READERS, validate({ params: IdParams }), async (req, res) => {
-  ok(res, await assessmentsService.get(req.user!, req.params.id as string));
+const unmask = (req: { query: unknown }) => (req.query as { unmask?: boolean }).unmask === true;
+
+assessmentsRouter.get('/:id', READERS, validate({ params: IdParams, query: UnmaskQuery }), async (req, res) => {
+  ok(res, await assessmentsService.get(req.user!, req.params.id as string, unmask(req)));
 });
 
-assessmentsRouter.get('/:id/messages', READERS, validate({ params: IdParams }), async (req, res) => {
-  ok(res, await assessmentsService.messages(req.user!, req.params.id as string));
+assessmentsRouter.get('/:id/messages', READERS, validate({ params: IdParams, query: UnmaskQuery }), async (req, res) => {
+  ok(res, await assessmentsService.messages(req.user!, req.params.id as string, unmask(req)));
 });
 
 assessmentsRouter.post('/:id/persona', REQUESTOR, validate({ params: IdParams, body: PersonaBody }), async (req, res) => {
@@ -45,8 +47,8 @@ assessmentsRouter.post('/:id/submit', REQUESTOR, validate({ params: IdParams }),
 const AUDITORS = requireRole('administrator', 'system_administrator', 'audit');
 
 /** T-063 / FR-26: lifecycle rebuilt from the audit log alone, with per-entry hash check and conformance diff. */
-assessmentsRouter.get('/:id/reconstruct', AUDITORS, validate({ params: IdParams }), async (req, res) => {
-  ok(res, await assessmentsService.reconstructFromAudit(req.user!, req.tenant!, req.params.id as string));
+assessmentsRouter.get('/:id/reconstruct', AUDITORS, validate({ params: IdParams, query: UnmaskQuery }), async (req, res) => {
+  ok(res, await assessmentsService.reconstructFromAudit(req.user!, req.tenant!, req.params.id as string, unmask(req)));
 });
 
 /** T-061: reviewers this assessment can be escalated to (PAID routing; empty list on FREE). */

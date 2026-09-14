@@ -113,8 +113,8 @@ export const audit = {
   },
 
   /** Ordered lifecycle of one entity (FR-26 reconstruction). */
-  async forEntity(tenantId: string, type: string, id: string) {
-    return AuditLogModel.find({ tenantId, 'entity.type': type, 'entity.id': id }).sort({ seq: 1 }).lean();
+  async forEntity(tenantId: string, type: string, id: string, categories?: string[]) {
+    return AuditLogModel.find({ tenantId, 'entity.type': type, 'entity.id': id, ...(categories ? { category: { $in: categories } } : {}) }).sort({ seq: 1 }).lean();
   },
 
   /**

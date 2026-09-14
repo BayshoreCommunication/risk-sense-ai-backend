@@ -20,6 +20,7 @@ import { scenariosRouter } from './modules/scenarios/routes';
 import { departmentsRouter } from './modules/tenants/routes';
 import { analyticsRouter, reportsRouter } from './modules/reports/routes';
 import { systemRouter } from './modules/system/routes';
+import { retentionRouter } from './modules/retention/routes';
 import { usersRouter } from './modules/users/routes';
 
 export function createApp() {
@@ -72,6 +73,7 @@ export function createApp() {
   api.use('/reports', reportsRouter);
   api.use('/analytics', analyticsRouter);
   api.use('/system', systemRouter);
+  api.use('/system/retention', retentionRouter);
   app.use('/api/v1', api);
 
   app.use(notFoundHandler);

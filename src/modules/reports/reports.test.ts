@@ -94,7 +94,7 @@ describe('reports & analytics [FR-26, FR-27, FR-28, DASH-03, DASH-04]', () => {
   });
 
   it('override rate per period + accept rate (accuracy proxy) + reasons retrievable [FR-26, FR-23, BRD §12]', async () => {
-    const r = (await get('/reports/override-rate', admin, { from: '2025-09-15', to: NOW.toISOString() })).body.data;
+    const r = (await get('/reports/override-rate', admin, { from: '2025-09-15', to: NOW.toISOString(), unmask: 'true' })).body.data; // SEC-05: administrators see reasons masked unless they unmask (audited)
     expect(r.summary).toMatchObject({ decided: 300, accepted: 120, overridden: 120, escalated: 60, overrideRate: 50, acceptRate: 50 });
     expect(r.summary.overriddenUp ?? r.rows.reduce((n: number, x: { overriddenUp: number }) => n + x.overriddenUp, 0)).toBeGreaterThan(0);
     const reasons = JSON.parse(r.summary.reasons);

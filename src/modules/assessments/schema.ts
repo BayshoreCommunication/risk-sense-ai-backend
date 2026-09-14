@@ -71,3 +71,5 @@ export const ListQuery = z.object({
 export type ListQuery = z.infer<typeof ListQuery>;
 
 export const IdParams = z.object({ id: z.string().min(1) });
+/** SEC-05: privileged readers may ask for clear values; the access is audited. */
+export const UnmaskQuery = z.object({ unmask: z.enum(['true', 'false']).optional().transform((v) => v === 'true') });

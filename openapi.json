@@ -589,6 +589,73 @@
           "sessionPolicy",
           "retentionPolicy"
         ]
+      },
+      "RetentionRunResult": {
+        "type": "object",
+        "properties": {
+          "tenantId": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "plan": {
+            "type": "string"
+          },
+          "dryRun": {
+            "type": "boolean"
+          },
+          "policy": {
+            "type": "object",
+            "properties": {
+              "assessmentDays": {
+                "type": "number"
+              },
+              "auditDays": {
+                "type": "number"
+              },
+              "graceDays": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "assessmentDays",
+              "auditDays",
+              "graceDays"
+            ]
+          },
+          "flagged": {
+            "type": "number"
+          },
+          "reduced": {
+            "type": "number"
+          },
+          "archived": {
+            "type": "number"
+          },
+          "messagesRemoved": {
+            "type": "number"
+          },
+          "auditPastRetention": {
+            "type": "number"
+          },
+          "durationMs": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "tenantId",
+          "slug",
+          "plan",
+          "dryRun",
+          "policy",
+          "flagged",
+          "reduced",
+          "archived",
+          "messagesRemoved",
+          "auditPastRetention",
+          "durationMs"
+        ]
       }
     },
     "parameters": {}
@@ -21805,6 +21872,18 @@
             "required": true,
             "name": "id",
             "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "required": false,
+            "name": "unmask",
+            "in": "query"
           }
         ],
         "responses": {
@@ -21857,6 +21936,18 @@
             "required": true,
             "name": "id",
             "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "required": false,
+            "name": "unmask",
+            "in": "query"
           }
         ],
         "responses": {
@@ -22129,6 +22220,18 @@
             "required": true,
             "name": "id",
             "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "required": false,
+            "name": "unmask",
+            "in": "query"
           }
         ],
         "responses": {
@@ -22404,6 +22507,18 @@
             "required": false,
             "name": "refresh",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "required": false,
+            "name": "unmask",
+            "in": "query"
           }
         ],
         "responses": {
@@ -22538,6 +22653,18 @@
             "schema": {
               "type": "string",
               "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "required": false,
+            "name": "unmask",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
                 "csv",
                 "pdf"
               ],
@@ -22646,6 +22773,18 @@
             },
             "required": false,
             "name": "refresh",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "required": false,
+            "name": "unmask",
             "in": "query"
           },
           {
@@ -22934,6 +23073,137 @@
                   "properties": {
                     "data": {
                       "$ref": "#/components/schemas/TenantSettings"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/retention/run": {
+      "post": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "dryRun": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                },
+                "default": {
+                  "dryRun": true
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SEC-06: run retention for the tenant (dryRun default true); audited retention.*",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/RetentionRunResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/retention/runs": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Last 30 retention runs (retentionRuns)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/RetentionRunResult"
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "_id": {
+                                "type": "string"
+                              },
+                              "ranAt": {
+                                "type": "string"
+                              },
+                              "trigger": {
+                                "type": "string"
+                              },
+                              "error": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "_id",
+                              "ranAt",
+                              "trigger"
+                            ]
+                          }
+                        ]
+                      }
                     },
                     "meta": {
                       "type": "object",
