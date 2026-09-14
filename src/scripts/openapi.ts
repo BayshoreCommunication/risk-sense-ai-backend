@@ -15,6 +15,7 @@ import { QuestionBody, QuestionListQuery, QuestionPatch } from '../modules/quest
 import { JsonUploadBody } from '../modules/datasets/routes';
 import { RuleBody, RuleListQuery, RulePatch, ApproveBody as RuleApproveBody } from '../modules/rules/schema';
 import { MatrixBody, MatrixListQuery, MatrixPatch, SimulateBody } from '../modules/scoring/schema';
+import { ExportQuery, ReportParams, ReportQuery, TrendsQuery } from '../modules/reports/schema';
 import { DecisionBody, ListQuery as AssessmentListQuery, MessageBody, PersonaBody as AssessmentPersonaBody, StartBody } from '../modules/assessments/schema';
 
 extendZodWithOpenApi(z);
@@ -230,6 +231,11 @@ registry.registerPath({ method: 'post', path: '/assessments/{id}/submit', securi
 registry.registerPath({ method: 'get', path: '/assessments/{id}/reconstruct', security: secured, request: { params: idp }, responses: { 200: { description: 'FR-26: lifecycle rebuilt from the audit log (timeline, state, completeness, integrity, conformance)', content: { 'application/json': { schema: Envelope(Any.openapi('AssessmentReconstruction')) } } } } });
 registry.registerPath({ method: 'get', path: '/assessments/{id}/escalation-targets', security: secured, request: { params: idp }, responses: { 200: { description: 'Reviewers the caller may escalate to (T-061; empty on FREE)', content: { 'application/json': { schema: Envelope(z.array(z.object({ _id: z.string(), name: z.string(), email: z.string(), departmentIds: z.array(z.string()), crossDepartmentAccess: z.boolean() }).openapi('EscalationTarget'))) } } } } });
 registry.registerPath({ method: 'post', path: '/assessments/{id}/decision', security: secured, request: { params: idp, body: { content: { 'application/json': { schema: DecisionBody } } } }, responses: { 200: { description: 'Decision recorded; closed or escalated', content: { 'application/json': { schema: Envelope(Assessment) } } } } });
+
+const ReportResult = z.object({ type: z.string(), params: z.record(z.unknown()), range: z.object({ from: z.string(), to: z.string(), interval: z.string() }), generatedAt: z.string(), cached: z.boolean(), computeMs: z.number(), columns: z.array(z.object({ key: z.string(), label: z.string(), kind: z.enum(['text', 'number', 'percent', 'seconds']) })), rows: z.array(z.record(z.union([z.string(), z.number(), z.null()]))), summary: z.record(z.union([z.string(), z.number(), z.null()])) }).openapi('ReportResult');
+registry.registerPath({ method: 'get', path: '/reports/{type}', security: secured, request: { params: ReportParams, query: ReportQuery.innerType() }, responses: { 200: { description: 'Standard report (FR-26): volume | classification | override-rate | assessment-time; cached 1 h; PAID reports feature', content: { 'application/json': { schema: Envelope(ReportResult) } } } } });
+registry.registerPath({ method: 'get', path: '/reports/{type}/export', security: secured, request: { params: ReportParams, query: ExportQuery }, responses: { 200: { description: 'CSV or PDF of the same rows (FR-28)', content: { 'text/csv': { schema: z.string() }, 'application/pdf': { schema: z.string().openapi({ format: 'binary' }) } } } } });
+registry.registerPath({ method: 'get', path: '/analytics/trends', security: secured, request: { query: TrendsQuery }, responses: { 200: { description: 'Trend rows per period × department | persona | scenario (FR-27, DASH-03)', content: { 'application/json': { schema: Envelope(ReportResult) } } } } });
 
 const doc = new OpenApiGeneratorV3(registry.definitions).generateDocument({
   openapi: '3.0.3',
