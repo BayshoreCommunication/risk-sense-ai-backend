@@ -4,7 +4,7 @@ import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import { randomUUID } from 'node:crypto';
 import pinoHttp from 'pino-http';
-import { env, isTest } from './config/env';
+import { env, isProd, isTest } from './config/env';
 import { logger } from './lib/logger';
 import { errorHandler, notFoundHandler } from './middleware/error';
 import { assessmentsRouter } from './modules/assessments/routes';
