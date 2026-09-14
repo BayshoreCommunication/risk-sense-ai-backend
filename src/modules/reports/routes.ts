@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { ok } from '../../lib/http';
 import { authenticate } from '../../middleware/auth';
+import { reportsLimiter } from '../../middleware/limits';
 import { requireFeature, requireRole } from '../../middleware/rbac';
 import { requireSession } from '../../middleware/session';
 import { validate } from '../../middleware/validate';
@@ -14,7 +15,7 @@ import { reportsService } from './service';
 export const reportsRouter = Router();
 export const analyticsRouter = Router();
 const READERS = requireRole('requestor', 'administrator', 'system_administrator', 'audit');
-for (const r of [reportsRouter, analyticsRouter]) r.use(authenticate, requireSession, requireFeature('reports'), READERS);
+for (const r of [reportsRouter, analyticsRouter]) r.use(authenticate, requireSession, requireFeature('reports'), READERS, reportsLimiter);
 
 const TITLES: Record<ReportType, string> = { volume: 'Assessment volume', classification: 'Classification distribution', 'override-rate': 'Override rate', 'assessment-time': 'Average assessment time' };
 

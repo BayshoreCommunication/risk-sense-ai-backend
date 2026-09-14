@@ -3,6 +3,7 @@ import { ok } from '../../lib/http';
 import { authenticate } from '../../middleware/auth';
 import { requireRole } from '../../middleware/rbac';
 import { requireSession } from '../../middleware/session';
+import { messagesLimiter } from '../../middleware/limits';
 import { validate } from '../../middleware/validate';
 import { DecisionBody, IdParams, ListQuery, MessageBody, PersonaBody, StartBody, UnmaskQuery } from './schema';
 import { assessmentsService } from './service';
@@ -36,7 +37,7 @@ assessmentsRouter.post('/:id/persona', REQUESTOR, validate({ params: IdParams, b
   ok(res, await assessmentsService.setPersona(req.user!, req.tenant!, req.params.id as string, (req.body as { personaKey: string }).personaKey));
 });
 
-assessmentsRouter.post('/:id/messages', REQUESTOR, validate({ params: IdParams, body: MessageBody }), async (req, res) => {
+assessmentsRouter.post('/:id/messages', REQUESTOR, messagesLimiter, validate({ params: IdParams, body: MessageBody }), async (req, res) => {
   ok(res, await assessmentsService.answer(req.user!, req.tenant!, req.params.id as string, req.body));
 });
 

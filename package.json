@@ -21,7 +21,8 @@
     "templates": "tsx src/scripts/build-templates.ts",
     "seed:content": "tsx src/scripts/seed-content.ts",
     "seed:demo": "tsx src/scripts/seed-demo.ts",
-    "retention": "tsx src/scripts/retention.ts"
+    "retention": "tsx src/scripts/retention.ts",
+    "load:smoke": "tsx src/scripts/load-smoke.ts"
   },
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "^7.3.0",

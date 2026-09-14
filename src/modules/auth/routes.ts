@@ -4,6 +4,7 @@ import { AppError } from '../../lib/errors';
 import { ok } from '../../lib/http';
 import { authenticate } from '../../middleware/auth';
 import { requireSession } from '../../middleware/session';
+import { sessionLimiter } from '../../middleware/limits';
 import { validate } from '../../middleware/validate';
 import { TenantModel } from '../tenants/model';
 import { PRIVILEGED_ROLES } from '../users/model';
@@ -41,7 +42,7 @@ authRouter.post('/otp/request', authenticate, async (req, res) => {
  * OTP is required for every Firebase login when the tenant policy says so (default true, FR-01) and
  * always for administrator / system_administrator (SEC-03). The dev bypass skips it.
  */
-authRouter.post('/session', authenticate, validate({ body: CreateSessionBody }), async (req, res) => {
+authRouter.post('/session', sessionLimiter, authenticate, validate({ body: CreateSessionBody }), async (req, res) => {
   const viaFirebase = Boolean(req.header('authorization'));
   // FR-03: a login through the tenant's configured SSO provider brings the IdP's own MFA, so the email OTP is
   // skipped — except for privileged roles, which always complete our second factor (SEC-03, DecisionLog 15).

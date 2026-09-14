@@ -6,6 +6,7 @@ import { ok } from '../../lib/http';
 import { authenticate } from '../../middleware/auth';
 import { requireRole } from '../../middleware/rbac';
 import { requireSession } from '../../middleware/session';
+import { datasetsLimiter } from '../../middleware/limits';
 import { validate } from '../../middleware/validate';
 import { datasetsService } from './service';
 import { buildTemplateWorkbook } from './template';
@@ -36,7 +37,7 @@ datasetsRouter.get('/', READERS, async (req, res) => {
  * POST /datasets — multipart `file` (.xlsx) or JSON `{ fileName, content }` (template column names).
  * Always stores a dataset record: `validated` or `rejected` with row errors. Nothing is applied (FR-13).
  */
-datasetsRouter.post('/', ADMIN, upload.single('file'), async (req, res) => {
+datasetsRouter.post('/', ADMIN, datasetsLimiter, upload.single('file'), async (req, res) => {
   const tenantId = req.user!.tenantId;
   if (req.file) {
     if (!req.file.originalname.toLowerCase().endsWith('.xlsx')) throw new AppError('VALIDATION_ERROR', 'Only .xlsx files are accepted');

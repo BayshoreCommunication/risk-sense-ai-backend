@@ -36,11 +36,22 @@ export function createApp() {
   });
   if (!isTest) app.use(pinoHttp({ logger, genReqId: (_req, res) => res.locals.requestId }));
 
-  app.use(helmet());
+  app.use(
+    helmet({
+      // API only: no HTML is served, so a strict CSP is fine; HSTS is meaningful once Render terminates TLS (SEC-04).
+      contentSecurityPolicy: { directives: { defaultSrc: ["'none'"], frameAncestors: ["'none'"] } },
+      hsts: { maxAge: 63072000, includeSubDomains: true, preload: true },
+      crossOriginResourcePolicy: { policy: 'same-site' },
+      referrerPolicy: { policy: 'no-referrer' },
+    }),
+  );
+  const origins = env.CORS_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean);
   app.use(
     cors({
-      origin: env.CORS_ORIGINS.split(',').map((s) => s.trim()),
+      // Allowlist only (no wildcard); non-browser callers without Origin are allowed (health checks, scripts).
+      origin: (origin, cb) => cb(null, !origin || origins.includes(origin) ? origin ?? true : false),
       credentials: true,
+      maxAge: 600,
       allowedHeaders: ['Authorization', 'Content-Type', 'X-Session-Id', 'X-Request-Id', 'X-Dev-User'],
     }),
   );
