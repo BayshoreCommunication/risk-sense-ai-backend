@@ -457,6 +457,138 @@
           "rows",
           "summary"
         ]
+      },
+      "TenantSettings": {
+        "type": "object",
+        "properties": {
+          "_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "plan": {
+            "type": "string",
+            "enum": [
+              "free",
+              "paid"
+            ]
+          },
+          "features": {
+            "type": "object",
+            "properties": {
+              "sso": {
+                "type": "boolean"
+              },
+              "reviewDashboard": {
+                "type": "boolean"
+              },
+              "reports": {
+                "type": "boolean"
+              },
+              "fullAudit": {
+                "type": "boolean"
+              },
+              "departmentMapping": {
+                "type": "boolean"
+              },
+              "blockConcurrentLogin": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "sso",
+              "reviewDashboard",
+              "reports",
+              "fullAudit",
+              "departmentMapping",
+              "blockConcurrentLogin"
+            ]
+          },
+          "sso": {
+            "type": "object",
+            "properties": {
+              "providerId": {
+                "type": "string",
+                "nullable": true
+              },
+              "domain": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "providerId",
+              "domain"
+            ]
+          },
+          "authPolicy": {
+            "type": "object",
+            "properties": {
+              "otpRequired": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "otpRequired"
+            ]
+          },
+          "sessionPolicy": {
+            "type": "object",
+            "properties": {
+              "idleTimeoutMin": {
+                "type": "number"
+              },
+              "maxConcurrentSessions": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "idleTimeoutMin",
+              "maxConcurrentSessions"
+            ]
+          },
+          "retentionPolicy": {
+            "type": "object",
+            "properties": {
+              "assessmentDays": {
+                "type": "number"
+              },
+              "auditDays": {
+                "type": "number"
+              },
+              "evidenceDays": {
+                "type": "number"
+              },
+              "datasetHistoryDays": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "assessmentDays",
+              "auditDays",
+              "evidenceDays",
+              "datasetHistoryDays"
+            ]
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "_id",
+          "name",
+          "slug",
+          "plan",
+          "features",
+          "sso",
+          "authPolicy",
+          "sessionPolicy",
+          "retentionPolicy"
+        ]
       }
     },
     "parameters": {}
@@ -22541,6 +22673,267 @@
                   "properties": {
                     "data": {
                       "$ref": "#/components/schemas/ReportResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/sso/lookup": {
+      "get": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 254,
+              "format": "email"
+            },
+            "required": true,
+            "name": "email",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSO provider for the email domain (FR-03); providerId null when none",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "providerId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "tenant": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "providerId",
+                        "tenant"
+                      ]
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/tenant": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tenant settings (system_administrator)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/TenantSettings"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 120
+                  },
+                  "plan": {
+                    "type": "string",
+                    "enum": [
+                      "free",
+                      "paid"
+                    ]
+                  },
+                  "features": {
+                    "type": "object",
+                    "properties": {
+                      "sso": {
+                        "type": "boolean"
+                      },
+                      "reviewDashboard": {
+                        "type": "boolean"
+                      },
+                      "reports": {
+                        "type": "boolean"
+                      },
+                      "fullAudit": {
+                        "type": "boolean"
+                      },
+                      "departmentMapping": {
+                        "type": "boolean"
+                      },
+                      "blockConcurrentLogin": {
+                        "type": "boolean"
+                      }
+                    }
+                  },
+                  "sso": {
+                    "type": "object",
+                    "properties": {
+                      "providerId": {
+                        "type": "string",
+                        "nullable": true,
+                        "pattern": "^(microsoft\\.com|google\\.com|apple\\.com|github\\.com|oidc\\.[a-z0-9-]+|saml\\.[a-z0-9-]+)$"
+                      },
+                      "domain": {
+                        "type": "string",
+                        "nullable": true,
+                        "pattern": "^[a-z0-9.-]+\\.[a-z]{2,}$"
+                      }
+                    },
+                    "required": [
+                      "providerId",
+                      "domain"
+                    ]
+                  },
+                  "authPolicy": {
+                    "type": "object",
+                    "properties": {
+                      "otpRequired": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "otpRequired"
+                    ]
+                  },
+                  "sessionPolicy": {
+                    "type": "object",
+                    "properties": {
+                      "idleTimeoutMin": {
+                        "type": "integer",
+                        "minimum": 5,
+                        "maximum": 30
+                      },
+                      "maxConcurrentSessions": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10
+                      }
+                    }
+                  },
+                  "retentionPolicy": {
+                    "type": "object",
+                    "properties": {
+                      "assessmentDays": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 3650
+                      },
+                      "auditDays": {
+                        "type": "integer",
+                        "minimum": 30,
+                        "maximum": 3650
+                      },
+                      "evidenceDays": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 3650
+                      },
+                      "datasetHistoryDays": {
+                        "type": "integer",
+                        "minimum": 30,
+                        "maximum": 3650
+                      }
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated settings; audited as config/tenant.updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/TenantSettings"
                     },
                     "meta": {
                       "type": "object",

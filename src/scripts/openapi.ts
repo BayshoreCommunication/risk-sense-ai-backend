@@ -8,7 +8,8 @@ import { z } from 'zod';
 import { ROLES } from '../modules/users/model';
 import { TENANT_PLANS } from '../modules/tenants/model';
 import { ListAuditQuery } from '../modules/audit/routes';
-import { CreateSessionBody } from '../modules/auth/routes';
+import { CreateSessionBody, SsoLookupQuery } from '../modules/auth/routes';
+import { TenantPatch } from '../modules/system/schema';
 import { PersonaBody, PersonaListQuery, PersonaPatch } from '../modules/personas/schema';
 import { ScenarioBody, ScenarioListQuery, ScenarioPatch } from '../modules/scenarios/schema';
 import { QuestionBody, QuestionListQuery, QuestionPatch } from '../modules/questions/schema';
@@ -236,6 +237,11 @@ const ReportResult = z.object({ type: z.string(), params: z.record(z.unknown()),
 registry.registerPath({ method: 'get', path: '/reports/{type}', security: secured, request: { params: ReportParams, query: ReportQuery.innerType() }, responses: { 200: { description: 'Standard report (FR-26): volume | classification | override-rate | assessment-time; cached 1 h; PAID reports feature', content: { 'application/json': { schema: Envelope(ReportResult) } } } } });
 registry.registerPath({ method: 'get', path: '/reports/{type}/export', security: secured, request: { params: ReportParams, query: ExportQuery }, responses: { 200: { description: 'CSV or PDF of the same rows (FR-28)', content: { 'text/csv': { schema: z.string() }, 'application/pdf': { schema: z.string().openapi({ format: 'binary' }) } } } } });
 registry.registerPath({ method: 'get', path: '/analytics/trends', security: secured, request: { query: TrendsQuery }, responses: { 200: { description: 'Trend rows per period × department | persona | scenario (FR-27, DASH-03)', content: { 'application/json': { schema: Envelope(ReportResult) } } } } });
+
+registry.registerPath({ method: 'get', path: '/auth/sso/lookup', request: { query: SsoLookupQuery }, responses: { 200: { description: 'SSO provider for the email domain (FR-03); providerId null when none', content: { 'application/json': { schema: Envelope(z.object({ providerId: z.string().nullable(), tenant: z.string().nullable() })) } } } } });
+const TenantSettings = z.object({ _id: z.string(), name: z.string(), slug: z.string(), plan: z.enum(TENANT_PLANS), features: AuthTenant.shape.features, sso: z.object({ providerId: z.string().nullable(), domain: z.string().nullable() }), authPolicy: z.object({ otpRequired: z.boolean() }), sessionPolicy: z.object({ idleTimeoutMin: z.number(), maxConcurrentSessions: z.number() }), retentionPolicy: z.object({ assessmentDays: z.number(), auditDays: z.number(), evidenceDays: z.number(), datasetHistoryDays: z.number() }), updatedAt: z.string().optional() }).openapi('TenantSettings');
+registry.registerPath({ method: 'get', path: '/system/tenant', security: secured, responses: { 200: { description: 'Tenant settings (system_administrator)', content: { 'application/json': { schema: Envelope(TenantSettings) } } } } });
+registry.registerPath({ method: 'patch', path: '/system/tenant', security: secured, request: { body: { content: { 'application/json': { schema: TenantPatch } } } }, responses: { 200: { description: 'Updated settings; audited as config/tenant.updated', content: { 'application/json': { schema: Envelope(TenantSettings) } } } } });
 
 const doc = new OpenApiGeneratorV3(registry.definitions).generateDocument({
   openapi: '3.0.3',

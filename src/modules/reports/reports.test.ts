@@ -159,7 +159,7 @@ describe('reports & analytics [FR-26, FR-27, FR-28, DASH-03, DASH-04]', () => {
     expect(csv.status).toBe(200);
     expect(csv.headers['content-type']).toMatch(/text\/csv/);
     expect(csv.headers['content-disposition']).toMatch(/risksense-volume-2026-09-14\.csv/);
-    const lines = csv.text.replace(/^﻿/, '').trim().split('\r\n');
+    const lines = csv.text.replace(/^\uFEFF/, '').trim().split('\r\n');
     expect(lines[0]).toBe('Period,Started,Closed,Escalated,Error review,In progress');
     expect(lines.length).toBe(1 + 13);
     expect(lines.at(-1)).toBe('2026-09,14,10,2,0,2'); // 1..14 Sept: kinds cycle 0..5 → 10 closed, 2 escalated, 2 in progress

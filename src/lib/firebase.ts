@@ -25,6 +25,8 @@ export interface VerifiedToken {
   name?: string;
   /** Firebase sets this when the user completed a second factor. Mirrors users.mfaEnrolled (SEC-03). */
   mfa: boolean;
+  /** `firebase.sign_in_provider`: `password`, `google.com`, `microsoft.com`, `oidc.<id>`, `saml.<id>` … (FR-03 SSO). */
+  signInProvider?: string;
 }
 
 export async function verifyIdToken(idToken: string): Promise<VerifiedToken> {
@@ -32,8 +34,8 @@ export async function verifyIdToken(idToken: string): Promise<VerifiedToken> {
   const a = await getApp();
   try {
     const decoded = await getAuth(a).verifyIdToken(idToken, true);
-    const signInSecondFactor = (decoded.firebase as { sign_in_second_factor?: string } | undefined)?.sign_in_second_factor;
-    return { uid: decoded.uid, email: decoded.email, name: decoded.name as string | undefined, mfa: Boolean(signInSecondFactor) };
+    const fb = decoded.firebase as { sign_in_second_factor?: string; sign_in_provider?: string } | undefined;
+    return { uid: decoded.uid, email: decoded.email, name: decoded.name as string | undefined, mfa: Boolean(fb?.sign_in_second_factor), signInProvider: fb?.sign_in_provider };
   } catch {
     throw new AppError('UNAUTHENTICATED', 'Invalid or expired ID token');
   }

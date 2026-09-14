@@ -14,7 +14,7 @@ const csvEscape = (s: string) => (/[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')
 export function toCsv(r: ReportResult): string {
   const head = r.columns.map((c) => csvEscape(c.label)).join(',');
   const body = r.rows.map((row) => r.columns.map((c) => csvEscape(cell(row[c.key], c.kind))).join(','));
-  return ['﻿' + head, ...body].join('\r\n') + '\r\n';
+  return ['\uFEFF' + head, ...body].join('\r\n') + '\r\n';
 }
 
 /** Simple tabular PDF (pdfkit — pure JS, no headless browser on Render). Landscape A4, repeating header row. */

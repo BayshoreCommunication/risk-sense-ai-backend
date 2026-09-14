@@ -8,6 +8,7 @@ import { SessionModel } from './model';
 interface Meta {
   userAgent?: string;
   ip?: string;
+  signInProvider?: string; // FR-03: which first factor produced this session
 }
 
 const minutes = (n: number) => n * 60 * 1000;
@@ -59,7 +60,7 @@ export const sessionService = {
       action: 'session.created',
       actor: user,
       entity: { type: 'session', id: sessionId },
-      payload: { userAgent: meta.userAgent },
+      payload: { userAgent: meta.userAgent, signInProvider: meta.signInProvider ?? null },
     });
     return session;
   },

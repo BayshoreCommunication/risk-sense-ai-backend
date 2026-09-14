@@ -10,7 +10,11 @@ export const usersService = {
    * provisioned by a system administrator (W10) — never created here.
    */
   async provisionSelfSignup(input: { firebaseUid: string; email: string; name?: string; mfa: boolean }) {
-    const tenant = await TenantModel.findOne({ slug: PUBLIC_TENANT_SLUG }).lean();
+    // FR-03: a verified email on a PAID tenant's SSO domain is provisioned into that tenant (just-in-time),
+    // otherwise into the shared FREE tenant.
+    const domain = input.email.toLowerCase().split('@')[1] ?? '';
+    const ssoTenant = domain ? await TenantModel.findOne({ 'features.sso': true, 'sso.domain': domain }).lean() : null;
+    const tenant = ssoTenant ?? (await TenantModel.findOne({ slug: PUBLIC_TENANT_SLUG }).lean());
     if (!tenant) throw new AppError('INTERNAL', 'Public tenant is missing — run the seed');
 
     const existingByEmail = await UserModel.findOne({ email: input.email.toLowerCase() });
@@ -48,7 +52,7 @@ export const usersService = {
       action: 'auth.self_signup',
       actor: { id: String(user._id), role: user.role },
       entity: { type: 'user', id: String(user._id) },
-      payload: { email: user.email, tenant: PUBLIC_TENANT_SLUG },
+      payload: { email: user.email, tenant: tenant.slug, viaSso: Boolean(ssoTenant) },
     });
     return user;
   },

@@ -17,6 +17,8 @@ export interface AuthUser {
   departmentIds: string[];
   crossDepartmentAccess: boolean;
   mfaEnrolled: boolean;
+  /** Firebase sign-in provider of this request's token (undefined for the dev bypass). */
+  signInProvider?: string;
 }
 
 export interface AuthTenant {
@@ -26,6 +28,7 @@ export interface AuthTenant {
   features: TenantFeatures;
   sessionPolicy: { idleTimeoutMin: number; maxConcurrentSessions: number };
   authPolicy: { otpRequired: boolean };
+  sso: { providerId: string | null; domain: string | null }; // FR-03
 }
 
 /**
@@ -40,10 +43,12 @@ export const authenticate: RequestHandler = async (req, _res, next) => {
 
   let user;
   let tokenMfa = false;
+  let signInProvider: string | undefined;
 
   if (header?.startsWith('Bearer ')) {
     const token = await verifyIdToken(header.slice('Bearer '.length).trim());
     tokenMfa = token.mfa;
+    signInProvider = token.signInProvider;
     user = await UserModel.findOne({ firebaseUid: token.uid }).lean();
     if (!user) {
       if (!token.email) throw new AppError('UNAUTHENTICATED', 'Identity has no email');
@@ -78,6 +83,7 @@ export const authenticate: RequestHandler = async (req, _res, next) => {
     crossDepartmentAccess: user.crossDepartmentAccess,
     // A completed second factor on this login also counts (keeps the flag honest after enrollment).
     mfaEnrolled: user.mfaEnrolled || tokenMfa,
+    signInProvider,
   };
   req.tenant = {
     id: String(tenant._id),
@@ -89,6 +95,7 @@ export const authenticate: RequestHandler = async (req, _res, next) => {
       maxConcurrentSessions: tenant.sessionPolicy?.maxConcurrentSessions ?? 1,
     },
     authPolicy: { otpRequired: tenant.authPolicy?.otpRequired ?? true },
+    sso: { providerId: tenant.sso?.providerId ?? null, domain: tenant.sso?.domain ?? null },
   };
   next();
 };
