@@ -10,7 +10,7 @@ import { PersonaModel } from '../modules/personas/model';
 import { QuestionModel } from '../modules/questions/model';
 import { RuleModel } from '../modules/rules/model';
 import { ScenarioModel } from '../modules/scenarios/model';
-import { MatrixModel } from '../modules/scoring/model';
+import { ScoringMatrixModel as MatrixModel } from '../modules/scoring/model';
 import { DepartmentModel, TenantModel } from '../modules/tenants/model';
 import { UserModel } from '../modules/users/model';
 
@@ -55,19 +55,20 @@ describe('multi-tenant isolation [NFR-04, SEC-01]', () => {
     { path: '/questions', marker: 'acme_only_question', as: () => publicAdmin },
     { path: '/rules', marker: 'acme_only_rule', as: () => publicAdmin },
     { path: '/scoring-matrices', marker: 'acme_only_matrix', as: () => publicAdmin },
-    { path: '/assessments', marker: 'acme secret', as: () => publicAuditor },
+    { path: '/assessments', marker: '__assessment_id__', as: () => publicAuditor },
     { path: '/departments', marker: 'Finance', as: () => publicAuditor },
     { path: '/audit-logs', marker: String(acmeId), as: () => publicAuditor },
   ];
 
   it('list routes never return another tenant’s documents', async () => {
     for (const l of LISTS) {
-      const mine = await request(app).get(`/api/v1${l.path}`).set(l.path.startsWith('/assessments') || l.path.startsWith('/departments') || l.path.startsWith('/audit-logs') ? acmeAdmin : acmeAdmin);
+      const marker = l.marker === '__assessment_id__' ? ids.assessment : l.marker;
+      const mine = await request(app).get(`/api/v1${l.path}`).set(acmeAdmin);
       expect(mine.status, l.path).toBe(200);
-      expect(JSON.stringify(mine.body), `${l.path} as acme should contain ${l.marker}`).toContain(l.marker);
+      expect(JSON.stringify(mine.body), `${l.path} as acme should contain ${marker}`).toContain(marker);
       const other = await request(app).get(`/api/v1${l.path}`).set(l.as());
       expect(other.status, l.path).toBe(200);
-      expect(JSON.stringify(other.body), `${l.path} as public must not contain ${l.marker}`).not.toContain(l.marker);
+      expect(JSON.stringify(other.body), `${l.path} as public must not contain ${marker}`).not.toContain(marker);
     }
   });
 
@@ -112,6 +113,9 @@ describe('multi-tenant isolation [NFR-04, SEC-01]', () => {
       /findOne\(\{ firebaseUid/, /findOne\(\{ email/, /findById\(user\.tenantId\)/, /findById\(o\.escalatedToUserId\)/, /findById\(req\.user!\.tenantId\)/, /findById\(scored/, /AssessmentMessageModel\.find\(\{ assessmentId/, /AssessmentMessageModel\.deleteMany\(\{ assessmentId/, /SessionModel\.find/, /SessionModel\.findOne/, /OtpModel/,
       /TenantModel\.findOne\(\{ slug/, /TenantModel\.findOne\(\{ 'features\.sso'/, /TenantModel\.findOne\(\{ _id: \{ \$ne/, /TenantModel\.find\(opts/, /AssessmentModel\.find\(\{ \.\.\.base/, /AssessmentModel\.updateOne\(\{ _id: doc\._id/, /AssessmentModel\.updateMany\(\{ _id: \{ \$in/, /AssessmentArchiveModel\.updateOne\(\{ assessmentId/,
       /UserModel\.updateOne/, /UserModel\.findById/, /findById\(id\)/, /\.findOne\(\{ _id: id, tenantId/, /AssessmentModel\.findById\(id\)/, /versionGroupId/, /key: q\.key/,
+      // filters assembled a few lines earlier from a tenant-scoped base (list(): `scope` → `base` → `filter`; audit routes: `filter.tenantId`)
+      /AssessmentModel\.aggregate\(pipeline\)/, /AssessmentModel\.countDocuments\(filter\)/, /\$match: base/, /AuditLogModel\.find\(filter\)/,
+      /OtpCodeModel/, // per-user codes; the user is already tenant-resolved by authenticate()
     ];
     const offenders: string[] = [];
     for (const file of files) {
