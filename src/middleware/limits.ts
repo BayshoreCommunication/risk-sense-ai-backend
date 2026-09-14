@@ -17,6 +17,8 @@ export const messagesLimiter = rateLimit({ ...base, windowMs: 60_000, limit: 20,
 /** 5/min per user on dataset uploads (parsing + validation is CPU heavy). */
 export const datasetsLimiter = rateLimit({ ...base, windowMs: 60_000, limit: 5, message: message('uploads') });
 /** 10/min per IP on session creation (credential stuffing / OTP guessing is also throttled by the OTP service). */
-export const sessionLimiter = rateLimit({ ...base, windowMs: 60_000, limit: 10, keyGenerator: (req) => req.ip ?? 'anonymous', message: message('sign-in attempts') });
+// Keyed by IP; the dev-bypass identity (never accepted in production) gets its own key so local e2e runs that sign in
+// many seeded accounts from 127.0.0.1 are not throttled as one client.
+export const sessionLimiter = rateLimit({ ...base, windowMs: 60_000, limit: 10, keyGenerator: (req) => (isTest || !env.AUTH_DEV_BYPASS ? (req.ip ?? 'anonymous') : (req.header('x-dev-user') ?? req.ip ?? 'anonymous')), message: message('sign-in attempts') });
 /** 10/min per user on report generation and exports (aggregations over a year of data). */
 export const reportsLimiter = rateLimit({ ...base, windowMs: 60_000, limit: 10, message: message('report requests') });
