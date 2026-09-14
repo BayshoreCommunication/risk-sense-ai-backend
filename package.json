@@ -23,7 +23,8 @@
     "seed:demo": "tsx src/scripts/seed-demo.ts",
     "retention": "tsx src/scripts/retention.ts",
     "load:smoke": "tsx src/scripts/load-smoke.ts",
-    "accuracy": "tsx src/scripts/accuracy-baseline.ts"
+    "accuracy": "tsx src/scripts/accuracy-baseline.ts",
+    "user:create": "tsx src/scripts/create-user.ts"
   },
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "^7.3.0",
