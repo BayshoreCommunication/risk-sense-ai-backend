@@ -58,10 +58,13 @@ export function createApp() {
   app.use(express.json({ limit: '1mb' }));
   app.use(
     rateLimit({
+      // API.md "Rate limits": 60 req/min per user — keyed by app session, then the dev-bypass identity (non-production
+      // only), then IP for unauthenticated calls. Per-route limits in middleware/limits.ts sit on top.
       windowMs: 60_000,
       limit: 60,
       standardHeaders: 'draft-7',
       legacyHeaders: false,
+      keyGenerator: (req) => req.header('x-session-id') ?? (env.AUTH_DEV_BYPASS && !isProd ? req.header('x-dev-user') : undefined) ?? req.ip ?? 'anonymous',
       skip: () => isTest || env.RATE_LIMIT_DISABLED,
       message: { error: { code: 'RATE_LIMITED', message: 'Too many requests' } },
     }),
