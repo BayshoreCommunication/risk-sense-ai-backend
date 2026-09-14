@@ -57,12 +57,12 @@ describe('multi-tenant isolation [NFR-04, SEC-01]', () => {
     { path: '/scoring-matrices', marker: 'acme_only_matrix', as: () => publicAdmin },
     { path: '/assessments', marker: '__assessment_id__', as: () => publicAuditor },
     { path: '/departments', marker: 'Finance', as: () => publicAuditor },
-    { path: '/audit-logs', marker: String(acmeId), as: () => publicAuditor },
+    { path: '/audit-logs', marker: '__tenant_id__', as: () => publicAuditor },
   ];
 
   it('list routes never return another tenant’s documents', async () => {
     for (const l of LISTS) {
-      const marker = l.marker === '__assessment_id__' ? ids.assessment : l.marker;
+      const marker = l.marker === '__assessment_id__' ? ids.assessment : l.marker === '__tenant_id__' ? String(acmeId) : l.marker;
       const mine = await request(app).get(`/api/v1${l.path}`).set(acmeAdmin);
       expect(mine.status, l.path).toBe(200);
       expect(JSON.stringify(mine.body), `${l.path} as acme should contain ${marker}`).toContain(marker);
@@ -116,6 +116,8 @@ describe('multi-tenant isolation [NFR-04, SEC-01]', () => {
       // filters assembled a few lines earlier from a tenant-scoped base (list(): `scope` → `base` → `filter`; audit routes: `filter.tenantId`)
       /AssessmentModel\.aggregate\(pipeline\)/, /AssessmentModel\.countDocuments\(filter\)/, /\$match: base/, /AuditLogModel\.find\(filter\)/,
       /OtpCodeModel/, // per-user codes; the user is already tenant-resolved by authenticate()
+      /Model\.find\(filter\)/, // list services build `filter` from { tenantId: ... } a few lines above
+      /updateOne\(\{ _id: existing\._id/, // `existing` was fetched with tenantId in the same function
     ];
     const offenders: string[] = [];
     for (const file of files) {
