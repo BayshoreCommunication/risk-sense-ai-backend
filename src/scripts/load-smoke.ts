@@ -4,25 +4,44 @@
  * against a backend running with AI_PROVIDER=mock. Prints p50/p95/max per step and fails (exit 2) when
  * p95 > 3000 ms (NFR-01) or any request errors.
  */
+import mongoose from 'mongoose';
+import { connectDb } from '../lib/db';
+import { TenantModel } from '../modules/tenants/model';
+import { UserModel } from '../modules/users/model';
+
 const argv = process.argv.slice(2);
 const arg = (k: string, d: string) => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1]! : d; };
 const BASE = arg('--base', 'http://localhost:4100/api/v1');
 const USERS = Number(arg('--users', '100'));
 const ROUNDS = Number(arg('--rounds', '1'));
-const ACCOUNTS = ['requestor@paid.local', 'colleague@paid.local', 'itlead@paid.local', 'requestor@dev.local'];
+// One account per virtual user (SEC-02 allows one session per account): `load<i>@load.local`, created on demand
+// in the PAID demo tenant when --seed-users is passed (needs MONGODB_URI of the target backend's database).
+const SEED_USERS = argv.includes('--seed-users');
+const account = (i: number) => `load${i}@load.local`;
+
+async function seedUsers(n: number) {
+  await connectDb();
+  const acme = await TenantModel.findOne({ slug: 'acme' });
+  if (!acme) throw new Error('run npm run seed against the target database first');
+  for (let i = 0; i < n; i++) {
+    await UserModel.updateOne({ email: account(i) }, { $setOnInsert: { firebaseUid: `dev:${account(i)}`, email: account(i), name: `Load User ${i}`, role: 'requestor', tenantId: acme._id, departmentIds: [] } }, { upsert: true });
+  }
+  await mongoose.disconnect();
+}
 const lat: Record<string, number[]> = {};
 let errors = 0;
+const firstError: Record<string, string> = {};
 
 async function call(step: string, method: string, path: string, headers: Record<string, string>, body?: unknown) {
   const t0 = performance.now();
   const res = await fetch(`${BASE}${path}`, { method, headers: { 'Content-Type': 'application/json', ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
   (lat[step] ??= []).push(performance.now() - t0);
-  if (!res.ok) { errors++; return null; }
+  if (!res.ok) { errors++; firstError[step] ??= `${res.status} ${(await res.text()).slice(0, 200)}`; return null; }
   return (await res.json()) as { data: Record<string, unknown> };
 }
 
 async function user(i: number) {
-  const email = ACCOUNTS[i % ACCOUNTS.length]!;
+  const email = account(i);
   const s = await call('session', 'POST', '/auth/session', { 'X-Dev-User': email });
   if (!s) return;
   const h = { 'X-Dev-User': email, 'X-Session-Id': String(s.data.sessionId) };
@@ -46,6 +65,7 @@ async function user(i: number) {
 const q = (xs: number[], p: number) => { const s = [...xs].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(p * s.length))] ?? 0; };
 
 async function main() {
+  if (SEED_USERS) await seedUsers(USERS);
   const t0 = Date.now();
   for (let r = 0; r < ROUNDS; r++) await Promise.all(Array.from({ length: USERS }, (_, i) => user(i)));
   const wall = Date.now() - t0;
@@ -56,6 +76,7 @@ async function main() {
     worstP95 = Math.max(worstP95, p95);
     console.log(`  ${step.padEnd(8)} n=${String(xs.length).padStart(5)}  p50=${q(xs, 0.5).toFixed(0).padStart(5)} ms  p95=${p95.toFixed(0).padStart(5)} ms  max=${Math.max(...xs).toFixed(0).padStart(5)} ms`);
   }
+  for (const [step, e] of Object.entries(firstError)) console.log(`  first error at ${step}: ${e}`);
   const ok = errors === 0 && worstP95 <= 3000;
   console.log(ok ? 'PASS: p95 ≤ 3000 ms and no errors (NFR-01)' : `FAIL: p95=${worstP95.toFixed(0)} ms errors=${errors}`);
   process.exit(ok ? 0 : 2);

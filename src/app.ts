@@ -62,7 +62,7 @@ export function createApp() {
       limit: 60,
       standardHeaders: 'draft-7',
       legacyHeaders: false,
-      skip: () => isTest,
+      skip: () => isTest || env.RATE_LIMIT_DISABLED,
       message: { error: { code: 'RATE_LIMITED', message: 'Too many requests' } },
     }),
   );

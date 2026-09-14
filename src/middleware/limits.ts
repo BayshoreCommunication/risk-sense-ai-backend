@@ -1,5 +1,5 @@
 import rateLimit from 'express-rate-limit';
-import { isTest } from '../config/env';
+import { env, isTest } from '../config/env';
 
 /**
  * SEC-04 / API.md "Rate limits": per-user limits on the expensive or abusable routes, on top of the global
@@ -7,7 +7,8 @@ import { isTest } from '../config/env';
  * Tests skip limits unless RATE_LIMIT_TEST=1 (limits.test.ts).
  */
 const key = (req: { header(name: string): string | undefined; ip?: string }) => req.header('x-session-id') ?? req.header('x-dev-user') ?? req.ip ?? 'anonymous';
-const skip = () => isTest && process.env.RATE_LIMIT_TEST !== '1';
+// RATE_LIMIT_DISABLED=true is for load tests behind one IP (refused in production by config/env.ts).
+const skip = () => env.RATE_LIMIT_DISABLED || (isTest && process.env.RATE_LIMIT_TEST !== '1');
 const message = (what: string) => ({ error: { code: 'RATE_LIMITED', message: `Too many ${what}; try again in a minute` } });
 const base = { standardHeaders: 'draft-7' as const, legacyHeaders: false, skip, keyGenerator: key };
 

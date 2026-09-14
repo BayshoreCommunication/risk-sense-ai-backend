@@ -38,6 +38,10 @@ const schema = z
       .optional()
       .transform((v) => v === 'true' || v === '1'),
     JOBS_RETENTION_HOUR: z.coerce.number().int().min(0).max(23).default(2),
+    RATE_LIMIT_DISABLED: z
+      .string()
+      .optional()
+      .transform((v) => v === 'true' || v === '1'), // load tests only
     LOG_LEVEL: z.enum(['silent', 'fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   })
   .superRefine((v, ctx) => {
@@ -47,6 +51,9 @@ const schema = z
       }
       if (!v.FIREBASE_SERVICE_ACCOUNT_B64) {
         ctx.addIssue({ code: 'custom', path: ['FIREBASE_SERVICE_ACCOUNT_B64'], message: 'required in production' });
+      }
+      if (v.RATE_LIMIT_DISABLED) {
+        ctx.addIssue({ code: 'custom', path: ['RATE_LIMIT_DISABLED'], message: 'must be false in production' });
       }
       if (v.MAIL_PROVIDER === 'console') {
         ctx.addIssue({ code: 'custom', path: ['MAIL_PROVIDER'], message: 'must be resend or smtp in production (OTP emails)' });
