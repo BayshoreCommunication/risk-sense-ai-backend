@@ -1,9 +1,27 @@
 RISKSENSE AI — PROJECT STATUS AND HANDOVER
 ==========================================
-Last updated: 2026-09-14 (day 2 of development — all nine phases built; go-live items listed in section 7)
+Last updated: 2026-09-14 (end of day 2 — all nine phases built, tested, tagged v1.0.0; go-live items in sections 7–8)
 Owner: Travis (Bayshore Communication). Client documents: Bayshore BRD v1.0 + TAC Solutions Requirements Draft v1.
 Give this file to any AI assistant or developer: it explains what exists, how it was built, why, and what is next.
 Deeper detail lives in docs/ai/*.md (architecture, database, API, business rules, decision log) and docs/dev-notes/*.md (one note per task, file by file).
+
+
+0. STATE AT A GLANCE (read this first)
+------------------------------------
+* Code state: every backlog phase (0–9) is implemented. Tag v1.0.0 = branch main = branch akib in both app repos:
+    risk-sense-ai-backend  main/akib 976e646  (v1.0.0 tag on ee90ee2 + the user:create script commit on top)
+    risk-sense-ai          main/akib 8ccf317  (v1.0.0)
+  Pushed to GitHub (BayshoreCommunication) on 2026-09-14. This workspace docs repo is local-only (no remote), tag v1.0.0.
+* Verified: backend 138 tests green; frontend lint + typecheck + production build; Playwright e2e 7/7 against the local
+  stack (real OpenAI model); load smoke 100 and 200 concurrent intakes p95 <= 1.2 s; DR drill 13 s; audit chain intact.
+* NOT yet done: production deployment (Render/Vercel/Atlas), UAT with TAC/Bayshore, TAC's real content, Resend domain,
+  SSO provider credentials, Figma-based UI polish. Everything needed for those is written down (section 8).
+* Env variables for deployment: ~/Downloads/risksense-env-vars.txt (placeholders + where to get each value; no secrets).
+* Local login: http://localhost:3000/login -> "Development sign-in" -> requestor@dev.local | requestor@paid.local |
+  admin@paid.local (has demo analytics data) | admin@dev.local | sysadmin@dev.local | audit@dev.local. No OTP locally.
+* Requirement-by-requirement evidence: docs/ai/RequirementsCoverage.md. Manual test scripts: docs/UAT.md.
+* If you are an AI assistant continuing this work: read CLAUDE.md, AGENTS.md, docs/ai/AI_MEMORY.md, then the dev-notes
+  in date order. Conventions in section 6 are mandatory (no AI-tool references in the app repos, English only, dev-note per task).
 
 
 1. WHAT THE PRODUCT IS
@@ -32,9 +50,11 @@ Auth     : Firebase Authentication FREE TIER for the first factor (email+passwor
 AI       : OpenAI API (Structured Outputs, model gpt-4.1-mini) ONLY for: persona inference, scenario selection,
            free-text fact extraction, explanation prose. Deterministic mock (AI_PROVIDER=mock) for tests/dev.
 Email    : lib/mailer.ts — console (dev: OTP shown on login page) | resend | smtp. Resend key exists; domain not verified yet.
-Git      : GitHub org BayshoreCommunication, repos risk-sense-ai and risk-sense-ai-backend (both pushed to origin/akib on
-           2026-09-14). This workspace folder is a local-only git repo (no remote). Work on branch "akib",
-           merge akib -> main (main deploys). CI = GitHub Actions on both repos (lint, typecheck, test, openapi freshness, build).
+Git      : GitHub org BayshoreCommunication, repos risk-sense-ai and risk-sense-ai-backend. Work on branch "akib",
+           merge akib -> main (main deploys). akib and main were pushed and v1.0.0 tagged on 2026-09-14 (Travis's
+           instruction). This workspace folder is a local-only git repo (no remote). CI = GitHub Actions on both repos
+           (lint, typecheck, test, openapi freshness, build). Note: main had an unrelated scaffold history from day 1;
+           it was reset to akib before tagging (documented in the 2026-09-14 chat, nothing else depended on it).
 Workspace: ~/Desktop/RiskSenseAi (this folder) is a third local-only git repo holding docs/, tasks/, scripts/.
            The two app folders inside it are the separate app repos.
 
@@ -44,7 +64,11 @@ Local run:
   Open http://localhost:3000/login -> "Development sign-in" -> click a seeded account (no OTP in dev bypass).
 Seeded accounts: requestor@dev.local, admin@dev.local, admin2@dev.local (second admin for approvals),
   sysadmin@dev.local, audit@dev.local, requestor@paid.local (Finance), colleague@paid.local (Finance, escalation target),
-  itlead@paid.local (IT), admin@paid.local (Acme administrator, sees the PAID review queue).
+  itlead@paid.local (IT), admin@paid.local (Acme administrator, sees the PAID review queue + demo analytics).
+  Demo data: npm run seed:demo (711 synthetic acme assessments over 12 months; already loaded in the dev Atlas db).
+Production accounts: no self-signup for administrator / system_administrator / audit. Provision with
+  npm run user:create -- --email x@y.com --name "X" --role administrator --tenant acme   then the person signs in with
+  Firebase using that email (password / Google / company SSO); the account links on first login; admins always get the OTP.
 
 
 3. REPOSITORY LAYOUT
@@ -54,15 +78,18 @@ RiskSenseAi/
   README.md, AGENTS.md (assistant working rules for the workspace)
   docs/ai/                      Overview, Architecture, Database, API, BusinessRules (every rule with its FR/NFR/SEC/AI/DASH id),
                                 Workflows, DecisionLog (28 dated decisions), Modules, Services, Patterns, Dependencies,
-                                DevelopmentGuide, TestingGuide, DeploymentGuide, Troubleshooting, KnownIssues, CommonMistakes,
-                                Glossary, PromptGuide, AI_MEMORY (current state), project-map.yaml (machine-readable map)
-  docs/agents/                  domain.md (3-minute briefing), issue-tracker.md (ISS-001..016), clarification-agenda.md (for TAC/Bayshore)
+                                DevelopmentGuide, TestingGuide, DeploymentGuide (incl. SSO providers, monitoring, TLS, load
+                                test, release checklist v1.0.0), Troubleshooting, KnownIssues, CommonMistakes, Glossary,
+                                PromptGuide, ControlMapping (SEC-08), DRRunbook (NFR-06, drill log), RequirementsCoverage
+                                (every requirement id -> status/evidence), AI_MEMORY (current state), project-map.yaml
+  docs/UAT.md                   manual acceptance scripts, groups A–H, sign-off table
+  docs/agents/                  domain.md (3-minute briefing), issue-tracker.md (ISS-001..019), clarification-agenda.md (for TAC/Bayshore)
   docs/content/TEMPLATE_GUIDE.md  how TAC fills the content workbook
   docs/dev-notes/               dated "what / where / why" notes — READ THESE to understand each step
   docs/requirements/            original BRD + Requirements docx (English) and Bangla translations
   docs/planning/                kickoff plan (Bangla)
   tasks/backlog.md              phases 0–9 as T-xxx tasks with requirement ids and estimates; tasks/sprint-0.md
-  scripts/start-all.sh
+  scripts/start-all.sh (both dev servers), scripts/dr-drill.sh (dump -> local restore -> verify)
   risk-sense-ai/                FRONTEND repo
   risk-sense-ai-backend/        BACKEND repo
 
@@ -86,7 +113,7 @@ Backend (risk-sense-ai-backend/src):
     system                      GET/PATCH /system/tenant (plan, features, sso, policies), audited
     retention                   flag -> grace -> reduce/archive job, runs + archives collections; jobs/scheduler.ts
     shared                      enums, conditions.ts (shared condition language for rules + scoring)
-  scripts/                      seed, seed-content, seed-demo, retention, load-smoke, accuracy-baseline, build-templates, openapi, verify-audit
+  scripts/                      seed, seed-content, seed-demo, create-user, retention, load-smoke, accuracy-baseline, build-templates, openapi, verify-audit
   lib/sensitive.ts              SEC-05 registry + masking; middleware/limits.ts rate limits; load/k6-intake.js
   templates/                    risksense-content-template.xlsx, sample-content.json, starter-content.json
   tests/setup.ts                in-memory mongod, forces mock AI + console mail
@@ -242,23 +269,42 @@ Test count: backend 138 (vitest + supertest + in-memory mongod). Frontend: typec
 7. OPEN ITEMS AND KNOWN GAPS
 ----------------------------
 Waiting on TAC / Bayshore: answers to the 7 open items (manager review, accuracy definition, retention, HIPAA mapping,
-  uptime, DR/session defaults, latency); real persona/scenario/question content and scoring numbers (our starter
-  content is a stand-in); duplicate requirement ids in Draft v1 (FR-03/04, FR-26, NFR-08).
-Waiting on Travis: Resend domain verification (DKIM/SPF) for real OTP mail; remaining screen designs (Figma has only
-  Login); Render/Vercel deployment; GitHub main-branch protection.
-Technical: dataset activation is not transactional (Atlas supports it; local mongod does not); one intermittent test
-  flake seen once in the full suite; SSE streaming deferred; frontend has no unit tests yet.
+  uptime, DR/session defaults, latency) — we build to the defaults in BusinessRules §12; real persona/scenario/question
+  content and scoring numbers (our starter content is a stand-in, ISS-008/009); duplicate requirement ids in Draft v1;
+  BAA/DPA paperwork for healthcare tenants (ControlMapping.md).
+Waiting on Travis: Resend domain verification (DKIM/SPF) for real OTP mail; Figma file access for the assistant
+  (ISS-017 — the file is not shared with the connector account; UI is shadcn defaults meanwhile); Render/Vercel/Atlas
+  production deployment (env file in ~/Downloads); GitHub main-branch protection; UptimeRobot / log-drain accounts;
+  SSO provider credentials (Microsoft/OIDC) in the Firebase project; a GitHub remote for this docs repo if wanted.
+Technical, accepted for v1.0.0: npm audit flags next@15.5.25 via postcss (fix only in Next 16) and a transitive uuid
+  advisory (ISS-018); dataset activation is not transactional; SSE streaming deferred (DecisionLog 21); frontend has
+  Playwright e2e but no unit tests; i18n covers the shell only (T-090 rest key by key); T-027 richer editors, T-028
+  department mapping editor, T-064 schema-shape sweep still open; requestor e2e uses the real model (use AI_PROVIDER=mock for CI).
+Data note: the dev Atlas database risksense_dev holds seeded accounts, starter content, 711 demo assessments
+  (versions.aiProvider = "demo") and a few real test intakes. Use a fresh database name for production.
 
 
 8. WHAT COMES NEXT (tasks/backlog.md)
 ------------------------------------
-All phases are built. Before go-live (see DeploymentGuide "Release checklist" and docs/UAT.md):
-  * UAT sessions with TAC/Bayshore (groups A-H), usability test (NFR-07), TAC's real content workbook (ISS-008/009).
-  * Staging deploy on Render/Vercel/Atlas M10: SSL Labs grade, PITR drill, UptimeRobot, SSO provider credentials.
-  * Figma file access for UI polish (ISS-017). Polish backlog: T-027 richer editors, T-028 department mapping editor,
-    T-064 schema-shape sweep, T-090 remaining strings.
-  * Merge akib -> main and tag v1.0.0 after UAT sign-off.
-T-028 department <-> persona mapping (PAID). Phase 6 reports/analytics + CSV/PDF export (PAID). Phase 7 security:
-PHI/PII masking, retention job (FREE reduction to login id/risk type/time/date/duration), SSO providers, multi-tenant
-guard audit, control mapping per sector. Phase 8: i18n wiring, rate limits, load test (100 concurrent, p95 <= 3 s),
-monitoring, DR drill. Phase 9: Playwright e2e for 4 roles, security scan, UAT, release checklist (docs/ai/DeploymentGuide.md).
+All phases are built and v1.0.0 is tagged. The order of the remaining work:
+  1. Deploy: Atlas M10 (new db risksense_prod) -> Firebase (authorized domains, providers) -> Resend domain ->
+     Render backend -> Vercel frontend, using ~/Downloads/risksense-env-vars.txt and DeploymentGuide "Release checklist".
+     Then npm run seed + seed:content on the production db and user:create for the real admin/sysadmin/audit accounts.
+  2. Post-deploy checks: /api/v1/health/ready, SSL Labs A on both hosts, UptimeRobot, Atlas alerts, PITR drill on staging
+     (DRRunbook.md), load smoke against staging (DeploymentGuide "Load test").
+  3. UAT with TAC/Bayshore using docs/UAT.md; load TAC's real workbook through /admin/datasets (approve with a second admin);
+     re-run npm run accuracy for the real baseline (ISS-019); usability session for NFR-07.
+  4. Polish once Figma is shared: screens per design, T-027 richer flow/condition editors, T-028 department mapping editor,
+     T-064 schema-shape sweep, T-090 remaining strings, system users/departments screens (W10).
+  5. Every future change: branch akib, tests + dev-note + docs, merge to main, tag vX.Y.Z (release checklist step 6).
+
+
+9. HOW TO RE-VERIFY EVERYTHING (copy-paste)
+--------------------------------------------
+  cd risk-sense-ai-backend && npm run lint && npm run typecheck && npm test                      # 138 tests
+  cd risk-sense-ai && npm run lint && npm run typecheck && npm run build                        # production build
+  scripts/start-all.sh   (or the two dev servers)  then:  cd risk-sense-ai && npm run e2e         # 7 Playwright tests
+  cd risk-sense-ai-backend && AI_PROVIDER=mock RATE_LIMIT_DISABLED=true PORT=4100 MONGODB_URI=mongodb://127.0.0.1:27017/risksense_load npm run dev
+  cd risk-sense-ai-backend && MONGODB_URI=mongodb://127.0.0.1:27017/risksense_load npm run load:smoke -- --base http://localhost:4100/api/v1 --users 100 --seed-users
+  ./scripts/dr-drill.sh                                                                          # dump/restore/verify
+  cd risk-sense-ai-backend && npm run audit:verify public && npm run accuracy                    # chain + accept rate
