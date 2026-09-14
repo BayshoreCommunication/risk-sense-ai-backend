@@ -113,7 +113,32 @@ export const audit = {
   },
 
   /** Ordered lifecycle of one entity (FR-26 reconstruction). */
-  async forEntity(type: string, id: string) {
-    return AuditLogModel.find({ 'entity.type': type, 'entity.id': id }).sort({ seq: 1 }).lean();
+  async forEntity(tenantId: string, type: string, id: string) {
+    return AuditLogModel.find({ tenantId, 'entity.type': type, 'entity.id': id }).sort({ seq: 1 }).lean();
+  },
+
+  /**
+   * Per-record integrity for a subset of the chain (SEC-07): each entry's hash must match its own content and
+   * prevHash. Continuity between entries of *different* entities is only provable by the full `verify()` walk,
+   * so this returns which seqs are individually tampered, not whether something was removed between them.
+   */
+  verifyEntries(entries: Array<{ tenantId: unknown; seq: number; category: string; action: string; actorUserId?: unknown; actorRole?: string | null; entity?: { type: string; id: string; version?: number | null } | null; payload?: unknown; prevHash: string; hash: string }>) {
+    const badSeqs: number[] = [];
+    for (const doc of entries) {
+      const entity = doc.entity ?? { type: '', id: '' };
+      const recomputed = hashInput({
+        tenantId: String(doc.tenantId),
+        seq: doc.seq,
+        category: doc.category,
+        action: doc.action,
+        actorUserId: doc.actorUserId ? String(doc.actorUserId) : null,
+        actorRole: doc.actorRole ?? null,
+        entity: { type: entity.type, id: entity.id, ...(entity.version != null ? { version: entity.version } : {}) },
+        payload: doc.payload ?? {},
+        prevHash: doc.prevHash,
+      });
+      if (recomputed !== doc.hash) badSeqs.push(doc.seq);
+    }
+    return { ok: badSeqs.length === 0, checked: entries.length, badSeqs };
   },
 };

@@ -300,6 +300,12 @@
           "nullable": true
         }
       },
+      "AssessmentReconstruction": {
+        "type": "object",
+        "additionalProperties": {
+          "nullable": true
+        }
+      },
       "EscalationTarget": {
         "type": "object",
         "properties": {
@@ -21846,6 +21852,58 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/assessments/{id}/reconstruct": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "FR-26: lifecycle rebuilt from the audit log (timeline, state, completeness, integrity, conformance)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AssessmentReconstruction"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
                 }
               }
             }

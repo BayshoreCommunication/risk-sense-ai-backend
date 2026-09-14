@@ -42,6 +42,13 @@ assessmentsRouter.post('/:id/submit', REQUESTOR, validate({ params: IdParams }),
   ok(res, await assessmentsService.submit(req.user!, req.tenant!, req.params.id as string));
 });
 
+const AUDITORS = requireRole('administrator', 'system_administrator', 'audit');
+
+/** T-063 / FR-26: lifecycle rebuilt from the audit log alone, with per-entry hash check and conformance diff. */
+assessmentsRouter.get('/:id/reconstruct', AUDITORS, validate({ params: IdParams }), async (req, res) => {
+  ok(res, await assessmentsService.reconstructFromAudit(req.user!, req.tenant!, req.params.id as string));
+});
+
 /** T-061: reviewers this assessment can be escalated to (PAID routing; empty list on FREE). */
 assessmentsRouter.get('/:id/escalation-targets', REQUESTOR, validate({ params: IdParams }), async (req, res) => {
   ok(res, await assessmentsService.escalationTargets(req.user!, req.tenant!, req.params.id as string));

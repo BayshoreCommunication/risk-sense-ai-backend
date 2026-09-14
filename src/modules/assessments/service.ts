@@ -11,6 +11,7 @@ import { conditionText, type Facts } from '../shared/conditions';
 import { CLASSIFICATIONS, type Classification } from '../shared/enums';
 import { applyBranch, initialQueue, missingRequired, nextQuestion, structuredValue, type FlowNode, type QuestionLite } from './branching';
 import { activePersonas, activeScenarios, contentTenantId, pinVersions, questionMap, scenarioByKey } from './content';
+import { reconstruct } from './reconstruct';
 import { ASSESSMENT_STATUSES, AssessmentMessageModel, AssessmentModel, type AssessmentStatus } from './model';
 import { PENDING_STATUSES, type DecisionBody, type ListQuery, type MessageBody, type StartBody } from './schema';
 
@@ -406,6 +407,46 @@ export const assessmentsService = {
       payload: { type: body.type, overriddenTo: body.overriddenTo ?? null, escalatedToUserId: target?._id ?? null, aiClassification: doc.result?.classification ?? null, ...(tenant.features.fullAudit ? { reason: body.reason ?? null } : {}) },
     });
     return this.view(doc);
+  },
+
+  /**
+   * T-063 / FR-26: rebuild the lifecycle from the audit log alone, check each entry's hash, and compare the
+   * rebuilt state with the stored document (FR-30 conformance). Readers: administrator, system_administrator, audit.
+   */
+  async reconstructFromAudit(user: AuthUser, tenant: AuthTenant, id: string) {
+    const doc = await loadFor(user, id);
+    const entries = await audit.forEntity(user.tenantId, 'assessment', id);
+    const integrity = audit.verifyEntries(entries as never);
+    const r = reconstruct(entries as never);
+    const differences: { field: string; fromAudit: unknown; stored: unknown }[] = [];
+    const cmp = (field: string, a: unknown, b: unknown) => {
+      if (a === null || a === undefined) return; // not reconstructible → not a difference
+      if (JSON.stringify(a) !== JSON.stringify(b ?? null)) differences.push({ field, fromAudit: a, stored: b ?? null });
+    };
+    cmp('personaKey', r.state.personaKey, doc.personaKey);
+    cmp('scenarioKey', r.state.scenarioKey, doc.scenarioKey);
+    cmp('status', r.state.status === 'unknown' ? null : r.state.status, doc.status);
+    cmp('result.score', r.state.score, doc.result?.score);
+    cmp('result.classification', r.state.classification, doc.result?.classification);
+    cmp('result.confidence', r.state.confidence, doc.result?.confidence);
+    cmp('decision.type', r.state.decisions.at(-1)?.type ?? null, doc.decision?.type);
+    if (r.completeness === 'full') {
+      const stored = Object.fromEntries(doc.facts.map((f) => [f.key, f.value]));
+      for (const [k, v] of Object.entries(r.state.facts)) cmp(`facts.${k}`, v, stored[k]);
+      for (const k of Object.keys(stored)) if (!(k in r.state.facts)) differences.push({ field: `facts.${k}`, fromAudit: null, stored: stored[k] });
+    }
+    return {
+      assessmentId: id,
+      plan: tenant.plan,
+      fullAudit: tenant.features.fullAudit,
+      entries: entries.length,
+      integrity,
+      completeness: r.completeness,
+      missing: r.missing,
+      timeline: r.timeline,
+      state: r.state,
+      conformance: { matches: differences.length === 0, differences },
+    };
   },
 
   /** T-061: reviewers the caller may escalate this assessment to (empty on FREE tenants). */
