@@ -1,6 +1,6 @@
 RISKSENSE AI — PROJECT STATUS AND HANDOVER
 ==========================================
-Last updated: 2026-09-13 (end of day 1 of development)
+Last updated: 2026-09-14 (day 2 of development — all nine phases built; go-live items listed in section 7)
 Owner: Travis (Bayshore Communication). Client documents: Bayshore BRD v1.0 + TAC Solutions Requirements Draft v1.
 Give this file to any AI assistant or developer: it explains what exists, how it was built, why, and what is next.
 Deeper detail lives in docs/ai/*.md (architecture, database, API, business rules, decision log) and docs/dev-notes/*.md (one note per task, file by file).
@@ -32,7 +32,8 @@ Auth     : Firebase Authentication FREE TIER for the first factor (email+passwor
 AI       : OpenAI API (Structured Outputs, model gpt-4.1-mini) ONLY for: persona inference, scenario selection,
            free-text fact extraction, explanation prose. Deterministic mock (AI_PROVIDER=mock) for tests/dev.
 Email    : lib/mailer.ts — console (dev: OTP shown on login page) | resend | smtp. Resend key exists; domain not verified yet.
-Git      : GitHub org BayshoreCommunication, repos risk-sense-ai and risk-sense-ai-backend. Work on branch "akib",
+Git      : GitHub org BayshoreCommunication, repos risk-sense-ai and risk-sense-ai-backend (both pushed to origin/akib on
+           2026-09-14). This workspace folder is a local-only git repo (no remote). Work on branch "akib",
            merge akib -> main (main deploys). CI = GitHub Actions on both repos (lint, typecheck, test, openapi freshness, build).
 Workspace: ~/Desktop/RiskSenseAi (this folder) is a third local-only git repo holding docs/, tasks/, scripts/.
            The two app folders inside it are the separate app repos.
@@ -42,7 +43,8 @@ Local run:
   cd risk-sense-ai && cp .env.example .env.local && npm install && npm run gen:api && npm run dev                          # :3000
   Open http://localhost:3000/login -> "Development sign-in" -> click a seeded account (no OTP in dev bypass).
 Seeded accounts: requestor@dev.local, admin@dev.local, admin2@dev.local (second admin for approvals),
-  sysadmin@dev.local, audit@dev.local, requestor@paid.local, itlead@paid.local.
+  sysadmin@dev.local, audit@dev.local, requestor@paid.local (Finance), colleague@paid.local (Finance, escalation target),
+  itlead@paid.local (IT), admin@paid.local (Acme administrator, sees the PAID review queue).
 
 
 3. REPOSITORY LAYOUT
@@ -51,7 +53,7 @@ RiskSenseAi/
   PROJECT_STATUS.txt            <- this file
   README.md, AGENTS.md (assistant working rules for the workspace)
   docs/ai/                      Overview, Architecture, Database, API, BusinessRules (every rule with its FR/NFR/SEC/AI/DASH id),
-                                Workflows, DecisionLog (22 dated decisions), Modules, Services, Patterns, Dependencies,
+                                Workflows, DecisionLog (28 dated decisions), Modules, Services, Patterns, Dependencies,
                                 DevelopmentGuide, TestingGuide, DeploymentGuide, Troubleshooting, KnownIssues, CommonMistakes,
                                 Glossary, PromptGuide, AI_MEMORY (current state), project-map.yaml (machine-readable map)
   docs/agents/                  domain.md (3-minute briefing), issue-tracker.md (ISS-001..016), clarification-agenda.md (for TAC/Bayshore)
@@ -78,9 +80,14 @@ Backend (risk-sense-ai-backend/src):
     rules                       hard rules engine + change control (draft->approved->active)
     scoring                     matrices (versioned + approval), compute.ts (pure scoring), simulate endpoint, golden set
     ai                          prompts.ts (v1), schemas.ts, service.ts (openaiAi | mockAi)
-    assessments                 model (schema invariants), branching.ts (pure flow), content.ts, service.ts (start/answer/submit/decide), routes
+    assessments                 model (schema invariants), branching.ts (pure flow), content.ts, service.ts (start/answer/submit/decide/list), routes
+    tenants                     models (tenant, department) + GET /departments lookup
+    reports                     standard reports + trends (aggregations, 1 h cache), CSV/PDF export
+    system                      GET/PATCH /system/tenant (plan, features, sso, policies), audited
+    retention                   flag -> grace -> reduce/archive job, runs + archives collections; jobs/scheduler.ts
     shared                      enums, conditions.ts (shared condition language for rules + scoring)
-  scripts/                      seed, seed-content, build-templates, openapi, verify-audit
+  scripts/                      seed, seed-content, seed-demo, retention, load-smoke, accuracy-baseline, build-templates, openapi, verify-audit
+  lib/sensitive.ts              SEC-05 registry + masking; middleware/limits.ts rate limits; load/k6-intake.js
   templates/                    risksense-content-template.xlsx, sample-content.json, starter-content.json
   tests/setup.ts                in-memory mongod, forces mock AI + console mail
 
@@ -90,9 +97,12 @@ Frontend (risk-sense-ai):
   lib/admin/content.ts, lib/assessments.ts
   app/(public)/login            first factor + OTP step + dev bypass
   app/(requestor)/chat, chat/[id], review
-  app/(admin)/admin/{personas,scenarios,questions,datasets,rules,scoring}
-  app/(system)/system, app/(audit)/audit   placeholders
-  components/admin/ContentManager.tsx (generic CRUD table+dialog), components/chat/{ChatSession,ResultCard}.tsx
+  app/(admin)/admin/{review,personas,scenarios,questions,datasets,rules,scoring,analytics}
+  app/(audit)/audit/{assessments,logs}     audit role: stored vs reconstructed view, hash-chained log viewer
+  app/(system)/system/{tenant,retention}   system administrator: tenant settings, retention runs
+  e2e/                                     Playwright suite (npm run e2e); i18n/ + messages/ (next-intl)
+  components/admin/ContentManager.tsx (generic CRUD table+dialog), components/chat/{ChatSession,ResultCard}.tsx,
+  components/review/{AssessmentDetail,ReconstructionView}.tsx (read-only views for administrators/auditors)
 
 
 4. WHAT HAS BEEN BUILT, IN ORDER (with the "how")
@@ -146,7 +156,58 @@ Phase 3 — chat engine (done, verified in the browser with the real OpenAI mode
     overwrote clicked answers -> now side facts only fill gaps, need >= 0.7 confidence, no placeholders (regression test).
   * Frontend: /chat start, /chat/[id] conversation with typed widgets, result card with the three decisions, /review list.
 
-Test count: backend 97 (vitest + supertest + in-memory mongod). Frontend: typecheck + lint (no unit tests yet).
+Phase 5 (first pass) — review dashboard (done 2026-09-13, late)
+  * GET /assessments is one aggregation: role/department scope (DASH-04) -> filters (status or pending, classification,
+    persona, scenario, department, date range) -> pending-first sort in the database -> page -> lookup of requestor
+    name/email and department name -> dashboard-only projection (never answers/facts). The same call returns counts per
+    status for the tabs. GET /departments feeds the department filter. Test asserts 500 open rows list in <= 3 s.
+  * /review: status tabs with counts, filters, sort, page size, prev/next, all mirrored in the URL; PAID reviewers see
+    requestor + department columns. Verified in the browser for a FREE requestor and a PAID department lead.
+
+Phase 5 (second pass) — escalation routing + mandatory-review queue (done 2026-09-14)
+  * GET /assessments/:id/escalation-targets lists reviewers (same-department or cross-department requestors, never
+    the caller; PAID only). POST decision {type: escalate, escalateToUserId} routes the assessment: the target can
+    read, list (escalatedToMe=true) and decide it even outside their department. Administrators are never targets.
+  * /admin/review: AI-03 mandatory-review queue (confidence below the matrix threshold, still pending) with a
+    read-only inspect dialog (result, flagged facts, decision, transcript). Verified in the browser.
+
+Phase 5 (third pass) — reconstruction from the audit log (done 2026-09-14)
+  * assessments/reconstruct.ts replays an assessment's audit entries (pure function) into a timeline + state. The
+    endpoint GET /assessments/:id/reconstruct adds a per-entry hash recheck (SEC-07) and a diff against the stored
+    document (FR-30): drift such as an edited fact or score is reported field by field. FREE tenants get a partial
+    rebuild with the missing parts named. Audit role now has /audit/assessments (Stored vs Reconstruct dialogs) and
+    /audit/logs (category/entity filters, payload expand, Verify chain).
+
+Phase 6 — reports & analytics, PAID (done 2026-09-14)
+  * modules/reports: four standard reports (volume, classification, override-rate with reasons, assessment-time
+    with median/p95) + trends by department/persona/scenario, all aggregations over assessments, zero-filled
+    periods, cached 1 h per (type, params, caller scope) with a TTL index, feature-gated (reports), requestors
+    department-scoped. CSV (BOM) and PDF (pdfkit, in-process) exports, audited as report.exported.
+  * /admin/analytics (DASH-03): stat tiles, bar chart (volume), status bars (classification), line charts
+    (override rate, median/p95 time, trends), chart/table toggle, CSV/PDF buttons, period/department/persona filters.
+    Colors from the validated reference palette (dataviz skill). npm run seed:demo fills acme with ~700 rows.
+
+Phase 7 — PAID security (done 2026-09-14)
+  * T-080 SSO: tenant sso {providerId, domain} + feature flag (system admin /system/tenant), GET /auth/sso/lookup, login page
+    "Continue with company SSO", OTP skipped for SSO logins of non-privileged roles, JIT provisioning by email domain.
+  * T-082 SEC-05: lib/sensitive.ts registry (class by sector: PHI/financial/PII); administrators/system admins/auditors read
+    free text masked; ?unmask=true returns clear values and writes access.unmasked; exports carry aggregates only.
+  * T-083 SEC-06: modules/retention (flag -> 7-day grace -> FREE reduce to permitted fields / PAID archive + reduce),
+    retentionRuns + assessmentArchives, POST /system/retention/run, npm run retention, in-process nightly scheduler
+    (JOBS_ENABLED) that also verifies every audit chain; /system/retention screen.
+  * T-084 NFR-04: tests/tenant-isolation.test.ts (route sweep across tenants + static scan of every Model query for tenantId).
+  * T-085 SEC-08: docs/ai/ControlMapping.md (GLBA/SOX/AML, HIPAA, NIST 800-53, ISO 27001/42001).
+
+Phase 8 — NFR (done 2026-09-14)
+  * T-090 next-intl (cookie locale, en + partial bn, shell + switcher), T-091 per-route rate limits + helmet/CORS + frontend
+    headers, T-092 load smoke PASS at 100 and 200 users (p95 <= 1.2 s, 0 errors) + index review, T-093 /health/live|ready +
+    alert table, T-094 docs/ai/DRRunbook.md + scripts/dr-drill.sh (local drill 13 s).
+
+Phase 9 — QA (built 2026-09-14; UAT sessions pending)
+  * T-100 Playwright suite 7/7 (risk-sense-ai/e2e), T-101 audit reviewed (ISS-018), T-102 docs/UAT.md, T-103 npm run accuracy
+    (77.6 % on demo data), T-104 release checklist in DeploymentGuide, docs/ai/RequirementsCoverage.md (every id -> evidence).
+
+Test count: backend 138 (vitest + supertest + in-memory mongod). Frontend: typecheck + lint + production build + 7 Playwright e2e.
 
 
 5. KEY DECISIONS (see docs/ai/DecisionLog.md for the full reasoning)
@@ -157,6 +218,12 @@ Test count: backend 97 (vitest + supertest + in-memory mongod). Frontend: typech
 13 audit without transactions 14 FREE self-signup          15 strict MFA via email OTP        16 string keys for content
 17 questions edited in place  18 one condition language    19 confidence formula             20 public content fallback
 21 no SSE (one JSON round-trip per turn)                   22 side facts fill gaps only
+23 dashboard ordering + tab counts computed in the DB in one list call
+24 escalation targets = requestors within reach; administrators inspect, never decide
+25 reconstruction = pure replay of audit entries; doubles as the FR-30 conformance check
+26 reports: pdfkit in-process, cache keyed by caller scope, final class = human override
+27 SSO = Firebase providers by email domain; JIT provisioning; OTP skipped only for SSO non-privileged
+28 masking by reader role, unmask audited; retention flag -> grace -> reduce/archive, in-process scheduler
 
 
 6. CONVENTIONS EVERY CONTRIBUTOR MUST FOLLOW
@@ -185,7 +252,12 @@ Technical: dataset activation is not transactional (Atlas supports it; local mon
 
 8. WHAT COMES NEXT (tasks/backlog.md)
 ------------------------------------
-Phase 5 polish: review dashboard filters/pagination (DASH-01), escalation targets, administrator mandatory-review queue.
+All phases are built. Before go-live (see DeploymentGuide "Release checklist" and docs/UAT.md):
+  * UAT sessions with TAC/Bayshore (groups A-H), usability test (NFR-07), TAC's real content workbook (ISS-008/009).
+  * Staging deploy on Render/Vercel/Atlas M10: SSL Labs grade, PITR drill, UptimeRobot, SSO provider credentials.
+  * Figma file access for UI polish (ISS-017). Polish backlog: T-027 richer editors, T-028 department mapping editor,
+    T-064 schema-shape sweep, T-090 remaining strings.
+  * Merge akib -> main and tag v1.0.0 after UAT sign-off.
 T-028 department <-> persona mapping (PAID). Phase 6 reports/analytics + CSV/PDF export (PAID). Phase 7 security:
 PHI/PII masking, retention job (FREE reduction to login id/risk type/time/date/duration), SSO providers, multi-tenant
 guard audit, control mapping per sector. Phase 8: i18n wiring, rate limits, load test (100 concurrent, p95 <= 3 s),
