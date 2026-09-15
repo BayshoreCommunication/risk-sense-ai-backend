@@ -1,310 +1,83 @@
-RISKSENSE AI — PROJECT STATUS AND HANDOVER
-==========================================
-Last updated: 2026-09-14 (end of day 2 — all nine phases built, tested, tagged v1.0.0; go-live items in sections 7–8)
-Owner: Travis (Bayshore Communication). Client documents: Bayshore BRD v1.0 + TAC Solutions Requirements Draft v1.
-Give this file to any AI assistant or developer: it explains what exists, how it was built, why, and what is next.
-Deeper detail lives in docs/ai/*.md (architecture, database, API, business rules, decision log) and docs/dev-notes/*.md (one note per task, file by file).
+# RiskSense AI — project status
 
+As of: 2026-09-15
+Release classification: repository implementation against an unsigned Draft v1 baseline; not externally accepted and not production-ready
 
-0. STATE AT A GLANCE (read this first)
-------------------------------------
-* Code state: every backlog phase (0–9) is implemented. Tag v1.0.0 = branch main = branch akib in both app repos:
-    risk-sense-ai-backend  main/akib 976e646  (v1.0.0 tag on ee90ee2 + the user:create script commit on top)
-    risk-sense-ai          main/akib 8ccf317  (v1.0.0)
-  Pushed to GitHub (BayshoreCommunication) on 2026-09-14. This workspace docs repo is local-only (no remote), tag v1.0.0.
-* Verified: backend 138 tests green; frontend lint + typecheck + production build; Playwright e2e 7/7 against the local
-  stack (real OpenAI model); load smoke 100 and 200 concurrent intakes p95 <= 1.2 s; DR drill 13 s; audit chain intact.
-* NOT yet done: production deployment (Render/Vercel/Atlas), UAT with TAC/Bayshore, TAC's real content, Resend domain,
-  SSO provider credentials, Figma-based UI polish. Everything needed for those is written down (section 8).
-* Env variables for deployment: ~/Downloads/risksense-env-vars.txt (placeholders + where to get each value; no secrets).
-* Local login: http://localhost:3000/login -> "Development sign-in" -> requestor@dev.local | requestor@paid.local |
-  admin@paid.local (has demo analytics data) | admin@dev.local | sysadmin@dev.local | audit@dev.local. No OTP locally.
-* Requirement-by-requirement evidence: docs/ai/RequirementsCoverage.md. Manual test scripts: docs/UAT.md.
-* If you are an AI assistant continuing this work: read CLAUDE.md, AGENTS.md, docs/ai/AI_MEMORY.md, then the dev-notes
-  in date order. Conventions in section 6 are mandatory (no AI-tool references in the app repos, English only, dev-note per task).
+## Authority
 
+The requirements in docs/requirements are Draft v1 and have not been signed off. They contain duplicate or ambiguous identifiers and interpretation gaps. Repository-complete means code and automated checks exist at the stated scope. It does not mean the owner/client, TAC, security, legal, operations, or end users have accepted the release.
 
-1. WHAT THE PRODUCT IS
-----------------------
-RiskSense AI is a conversational risk-assessment platform. An employee ("requestor") describes an incident
-to a chatbot. The system identifies the employee's persona (job role), picks a matching scenario, asks guided
-questions (MCQ / yes-no / number / free text), turns answers into structured facts, then a deterministic
-engine applies hard rules and a scoring matrix to produce a 0–100 score, a classification
-(monitor_only | risk | elevated_risk | issue), a confidence %, a plain-language explanation and a
-recommended action. A human must accept / override / escalate; the AI never decides or scores.
+## Implemented repository capabilities
 
-Two product tiers: FREE (self-signup, MFA, intake, minimal retention/audit) and PAID (SSO, review dashboard,
-full audit, reports, department routing, own "Corp. Instance"). Tier is a tenant setting, not a code fork.
+- Express/TypeScript/Mongoose API with Zod validation, OpenAPI generation, Firebase token verification, application sessions/OTP, tenant-aware RBAC, request limits, structured logging, and health endpoints.
+- Copy-on-write personas, scenarios, scoring matrices, and rules; audited active/retired questions; and sequenced reviewed dataset bundles with approval/activation workflows.
+- Transactional dataset activation and pinned content/rule/prompt versions.
+- JSON assessment turns with persona/scenario selection, deterministic branching, structured fact extraction/clarification, required-fact gates, deterministic rules/scoring, and explanation.
+- Decision invariant, accept/override/escalate, review queues, dashboards, lifecycle reconstruction, append-only application audit/hash verification, masking/audited unmasking, aggregate reports/exports, retention, and persistent conformance.
+- Requestor, administrator/content, system-administrator, and auditor frontend workspaces.
+- Generated typed frontend API client, English/Bengali message catalogs, and mocked browser correctness suites.
 
-Roles (exactly one per user): requestor, administrator (TAC content team), system_administrator (Bayshore), audit (read-only).
+## Task reconciliation
 
+- T-027 structured content editors are repository-complete; current lint, typecheck, Next.js 16 production build and the 28-case mocked Playwright suite are green.
+- T-028 manual user/persona/department mapping exists; real SSO claim-to-tenant/role mapping remains open.
+- T-037 is deferred and superseded by the JSON request/response design.
+- T-038 chat UI/resume exists; SSE/EventSource streaming was removed.
+- T-064 persistent conformance runs and flags are implemented.
+- T-090 English/Bengali repository coverage is repository-complete with exact 953/953 catalog parity and green aggregate frontend validation. Human Bengali/accessibility/usability acceptance remains open.
+- T-100 repository browser coverage is complete at the mocked-API scope (28/28 current cases); production-like full-stack evidence and human UAT remain external gates.
+- NFR-08 remains partial because sector choices are hardcoded.
 
-2. STACK AND ENVIRONMENT
-------------------------
-Frontend : risk-sense-ai            Next.js 15 (App Router, TypeScript), Tailwind 4, shadcn/ui. Deploy target Vercel.
-Backend  : risk-sense-ai-backend    Express 5 (CommonJS, TypeScript), Mongoose 8, Zod, pino. Deploy target Render (always-on).
-Database : MongoDB Atlas, db "risksense_dev" (dev). Tests use mongodb-memory-server (Homebrew mongod binary locally).
-Auth     : Firebase Authentication FREE TIER for the first factor (email+password, Google). Second factor = our own
-           email OTP (6 digits, 10 min, hash stored). Backend verifies Firebase ID tokens with firebase-admin.
-           Dev bypass: header "X-Dev-User: <seeded email>" when AUTH_DEV_BYPASS=true (never in production).
-AI       : OpenAI API (Structured Outputs, model gpt-4.1-mini) ONLY for: persona inference, scenario selection,
-           free-text fact extraction, explanation prose. Deterministic mock (AI_PROVIDER=mock) for tests/dev.
-Email    : lib/mailer.ts — console (dev: OTP shown on login page) | resend | smtp. Resend key exists; domain not verified yet.
-Git      : GitHub org BayshoreCommunication, repos risk-sense-ai and risk-sense-ai-backend. Work on branch "akib",
-           merge akib -> main (main deploys). akib and main were pushed and v1.0.0 tagged on 2026-09-14 (Travis's
-           instruction). This workspace folder is a local-only git repo (no remote). CI = GitHub Actions on both repos
-           (lint, typecheck, test, openapi freshness, build). Note: main had an unrelated scaffold history from day 1;
-           it was reset to akib before tagging (documented in the 2026-09-14 chat, nothing else depended on it).
-Workspace: ~/Desktop/RiskSenseAi (this folder) is a third local-only git repo holding docs/, tasks/, scripts/.
-           The two app folders inside it are the separate app repos.
+## AI boundary
 
-Local run:
-  cd risk-sense-ai-backend && cp .env.example .env && npm install && npm run seed && npm run seed:content && npm run dev   # :4000
-  cd risk-sense-ai && cp .env.example .env.local && npm install && npm run gen:api && npm run dev                          # :3000
-  Open http://localhost:3000/login -> "Development sign-in" -> click a seeded account (no OTP in dev bypass).
-Seeded accounts: requestor@dev.local, admin@dev.local, admin2@dev.local (second admin for approvals),
-  sysadmin@dev.local, audit@dev.local, requestor@paid.local (Finance), colleague@paid.local (Finance, escalation target),
-  itlead@paid.local (IT), admin@paid.local (Acme administrator, sees the PAID review queue + demo analytics).
-  Demo data: npm run seed:demo (711 synthetic acme assessments over 12 months; already loaded in the dev Atlas db).
-Production accounts: no self-signup for administrator / system_administrator / audit. Provision with
-  npm run user:create -- --email x@y.com --name "X" --role administrator --tenant acme   then the person signs in with
-  Firebase using that email (password / Google / company SSO); the account links on first login; admins always get the OTP.
+The product has four internal structured AI stages: persona inference, scenario selection, fact extraction, and explanation. Deterministic code owns scoring/classification. The opt-in test:ai-live command makes one potentially billable synthetic persona inference. It is connectivity/schema evidence only, not validation of five prompt types or production accuracy.
 
+## Operations boundary
 
-3. REPOSITORY LAYOUT
---------------------
-RiskSenseAi/
-  PROJECT_STATUS.txt            <- this file
-  README.md, AGENTS.md (assistant working rules for the workspace)
-  docs/ai/                      Overview, Architecture, Database, API, BusinessRules (every rule with its FR/NFR/SEC/AI/DASH id),
-                                Workflows, DecisionLog (28 dated decisions), Modules, Services, Patterns, Dependencies,
-                                DevelopmentGuide, TestingGuide, DeploymentGuide (incl. SSO providers, monitoring, TLS, load
-                                test, release checklist v1.0.0), Troubleshooting, KnownIssues, CommonMistakes, Glossary,
-                                PromptGuide, ControlMapping (SEC-08), DRRunbook (NFR-06, drill log), RequirementsCoverage
-                                (every requirement id -> status/evidence), AI_MEMORY (current state), project-map.yaml
-  docs/UAT.md                   manual acceptance scripts, groups A–H, sign-off table
-  docs/agents/                  domain.md (3-minute briefing), issue-tracker.md (ISS-001..019), clarification-agenda.md (for TAC/Bayshore)
-  docs/content/TEMPLATE_GUIDE.md  how TAC fills the content workbook
-  docs/dev-notes/               dated "what / where / why" notes — READ THESE to understand each step
-  docs/requirements/            original BRD + Requirements docx (English) and Bangla translations
-  docs/planning/                kickoff plan (Bangla)
-  tasks/backlog.md              phases 0–9 as T-xxx tasks with requirement ids and estimates; tasks/sprint-0.md
-  scripts/start-all.sh (both dev servers), scripts/dr-drill.sh (dump -> local restore -> verify)
-  risk-sense-ai/                FRONTEND repo
-  risk-sense-ai-backend/        BACKEND repo
+- The optional scheduler is one in-process daily owner for retention, audit verification, and conformance. There is no Redis/BullMQ/Agenda queue or report-cache job.
+- Assessment retention currently enforces closed-assessment handling. Evidence/dataset-history/per-object enforcement and external audit cold storage remain open.
+- Audit archive export is bounded and manifested, but external immutable custody/retrieval is not configured by the repository.
+- DR status stores operator-attested timestamps/outcome/reference. It does not query Atlas or prove backup/PITR.
+- Sensitive values, result messages and reconstruction answer/fact values are masked in responses with audited privileged unmasking; there is no field-encryption middleware.
+- There is no controller layer, SSE/EventSource contract, scenario factSchema, or second audit database in the implementation.
 
-Backend (risk-sense-ai-backend/src):
-  config/env.ts                 Zod-validated env; fails fast; production refuses dev bypass / console mail
-  lib/                          db, logger, errors (error-code vocabulary), hash (sha256 + canonical JSON), firebase (lazy admin),
-                                openai (structured() helper), mailer, versioned (copy-on-write versioning helper), http (envelope)
-  middleware/                   auth (Firebase token or dev header; FREE self-signup provisioning), session (15-min idle,
-                                1 session/account), rbac (role + MFA gate + PAID feature gate), validate (Zod), error
-  modules/
-    health, auth (sessions + otp), users, tenants (tenant + departments)
-    audit                       append-only, hash-chained log; no update/delete anywhere; GET /audit-logs, /verify
-    personas, scenarios, questions   content library (string keys; personas/scenarios versioned copy-on-write)
-    datasets                    xlsx/json upload -> validation -> approval by a second admin -> activation
-    rules                       hard rules engine + change control (draft->approved->active)
-    scoring                     matrices (versioned + approval), compute.ts (pure scoring), simulate endpoint, golden set
-    ai                          prompts.ts (v1), schemas.ts, service.ts (openaiAi | mockAi)
-    assessments                 model (schema invariants), branching.ts (pure flow), content.ts, service.ts (start/answer/submit/decide/list), routes
-    tenants                     models (tenant, department) + GET /departments lookup
-    reports                     standard reports + trends (aggregations, 1 h cache), CSV/PDF export
-    system                      GET/PATCH /system/tenant (plan, features, sso, policies), audited
-    retention                   flag -> grace -> reduce/archive job, runs + archives collections; jobs/scheduler.ts
-    shared                      enums, conditions.ts (shared condition language for rules + scoring)
-  scripts/                      seed, seed-content, seed-demo, create-user, retention, load-smoke, accuracy-baseline, build-templates, openapi, verify-audit
-  lib/sensitive.ts              SEC-05 registry + masking; middleware/limits.ts rate limits; load/k6-intake.js
-  templates/                    risksense-content-template.xlsx, sample-content.json, starter-content.json
-  tests/setup.ts                in-memory mongod, forces mock AI + console mail
+## External gates before release
 
-Frontend (risk-sense-ai):
-  middleware.ts                 cookie-based role guard (UX only; backend enforces RBAC)
-  lib/session.ts, lib/api/client.ts (openapi-fetch, types generated from backend openapi.json), lib/firebase/client.ts,
-  lib/admin/content.ts, lib/assessments.ts
-  app/(public)/login            first factor + OTP step + dev bypass
-  app/(requestor)/chat, chat/[id], review
-  app/(admin)/admin/{review,personas,scenarios,questions,datasets,rules,scoring,analytics}
-  app/(audit)/audit/{assessments,logs}     audit role: stored vs reconstructed view, hash-chained log viewer
-  app/(system)/system/{tenant,retention}   system administrator: tenant settings, retention runs
-  e2e/                                     Playwright suite (npm run e2e); i18n/ + messages/ (next-intl)
-  components/admin/ContentManager.tsx (generic CRUD table+dialog), components/chat/{ChatSession,ResultCard}.tsx,
-  components/review/{AssessmentDetail,ReconstructionView}.tsx (read-only views for administrators/auditors)
+1. Signed requirements and resolved interpretations.
+2. TAC-approved production content, mappings, default dataset, rules/matrices, and goldens.
+3. Real Firebase/Admin configuration, authorized domains, email-verification template/delivery, production OTP provider, and verified signup/sign-in UAT.
+4. IdP/SSO claims for tenant/role mapping and lifecycle.
+5. Approved hosting/regions, TLS/domain, secrets, current dependency disposition, and penetration/security acceptance.
+6. Monitoring, alerts, log custody, SLOs, on-call, and representative scale/capacity evidence.
+7. Atlas backup/PITR and isolated restore/failover evidence with accepted RTO/RPO.
+8. External immutable audit archive/cold storage, retrieval, and approved per-object retention/legal hold.
+9. Representative live-model validation and accepted accuracy evidence.
+10. Role UAT, accessibility, Bengali review, and comprehension/usability sign-off.
+11. Privacy, legal, residency, provider-processing, and sector/control approvals.
+12. Owner-provided Figma prompt/design and visual acceptance.
 
+## Verification commands
 
-4. WHAT HAS BEEN BUILT, IN ORDER (with the "how")
-------------------------------------------------
-Sprint 0 — foundation (done)
-  * Translated both client documents to Bangla; wrote kickoff plan; created the docs/ knowledge base.
-  * Scaffolded both apps. Backend: env validation, request ids, envelope {data|error, meta.requestId}, error codes.
-  * Auth: Firebase token verification; unknown identities auto-provision as FREE requestors in the "public" tenant;
-    pre-invited accounts (seeded with "dev:" uid) get linked on first login. Our own app sessions enforce the
-    15-minute idle timeout and one session per account (Firebase does not do this). Admin roles require MFA.
-  * MFA decision (Travis): strict two factors on the free tier = Firebase password/Google + our email OTP
-    (POST /auth/otp/request, then POST /auth/session {otpCode}). Rate limits, lockout after 5 wrong codes.
-  * Audit log: per-tenant sequence + SHA-256 hash chain (prevHash). Model refuses updates/deletes. Nightly/ad-hoc verify.
-  * Content templates for TAC (xlsx with 4 sheets: personas, scenarios, questions, scoring), CI workflows, clarification agenda.
-  * Git initialised, akib pushed, CI green. No AI-tool references are committed to the app repos (owner rule).
+Backend, from risk-sense-ai-backend:
 
-Phase 2 — administrator content (done except T-028 department mapping and richer editors)
-  * lib/versioned.ts: draft (editable in place) -> active (never mutated; editing creates the next draft version)
-    -> deactivated (kept forever because assessments pin versions). One "current" per version group.
-  * Personas, scenarios, questions reference each other by stable string keys (not ObjectIds). Scenario activation
-    validates: persona active, every flow question (and branch follow-ups) exists and is active, every required fact
-    is produced by a reachable question; then pins a questionSetHash.
-  * Datasets: upload xlsx/json -> parse (template columns, ";" lists, "Label=value" options, yes/no coercion)
-    -> Zod + cross-reference validation (file OR existing content) -> stored as validated/rejected with row-level errors
-    -> approval by a DIFFERENT administrator -> activation applies through the normal services (so versioning and
-    audit apply) including the scoring sheet (matrix "default" + hard rules "sheet_*").
-  * Starter content built from the BRD question sets because TAC has not delivered yet:
-    3 personas (Finance Officer, IT Support/Cybersecurity, Healthcare Compliance), 13 scenarios, 64 questions,
-    scoring sheet. Loaded into Atlas via npm run seed:content. A test guards that it always validates and activates.
-  * Rules: shared condition language ({factKey, op, value} | {all|any}); engine picks the lowest priority, ties -> most
-    severe; change control draft -> approved (other admin) -> active; edits go back to draft.
-  * Scoring: six factors (controlEffectiveness, impact, severity, likelihood, duration, regulatorySensitivity), each
-    weight + scale + mappings (first matching condition -> value, else scale min); score = sum(weight * normalized value);
-    contiguous thresholds; confidence = 70% required-fact coverage + 30% mean extraction confidence; < 60 ->
-    Professional Consult; score exactly 0 -> error review. POST /scoring/simulate runs the same functions; golden set
-    (src/modules/scoring/golden/starter.json) runs in CI.
-  * Admin screens for all of the above (generic ContentManager; nested fields edited as JSON for now) + live simulator.
+    npm ci
+    npm run lint
+    npm run typecheck
+    npm test
+    npm run openapi
+    git diff --exit-code -- openapi.json
+    npm run build
 
-Phase 3 — chat engine (done, verified in the browser with the real OpenAI model)
-  * Start: persona given or inferred (confidence >= 0.6, else the user picks from candidates; can override).
-    Scenario selected from the persona's library (>= 0.5, else the persona's default scenario). Versions pinned.
-  * Turns: MCQ / yes-no / number answers are structured immediately (no model call). Free text goes to the extractor;
-    the asked fact is "settled" only if extracted, type-coercible and confidence >= 0.5, otherwise one clarification
-    is asked and then the value is kept but flagged. Branch follow-ups are inserted at the front of the queue when the
-    trigger value matches. Missing required facts get one re-ask. Then status intake_complete.
-  * Submit: rules -> scoring -> explanation (model writes prose from computed numbers; never re-derives the class)
-    -> recommended action -> awaiting_decision (or error_review). Decision: accept/override(reason >= 25 chars + new
-    class)/escalate; only this path can close; the Mongoose schema hook rejects closed-without-decision.
-  * Content resolution: a tenant without its own personas uses the public library.
-  * Incident fixed during real-model verification: the extractor returned "unknown" side facts for every key and
-    overwrote clicked answers -> now side facts only fill gaps, need >= 0.7 confidence, no placeholders (regression test).
-  * Frontend: /chat start, /chat/[id] conversation with typed widgets, result card with the three decisions, /review list.
+Frontend, from risk-sense-ai:
 
-Phase 5 (first pass) — review dashboard (done 2026-09-13, late)
-  * GET /assessments is one aggregation: role/department scope (DASH-04) -> filters (status or pending, classification,
-    persona, scenario, department, date range) -> pending-first sort in the database -> page -> lookup of requestor
-    name/email and department name -> dashboard-only projection (never answers/facts). The same call returns counts per
-    status for the tabs. GET /departments feeds the department filter. Test asserts 500 open rows list in <= 3 s.
-  * /review: status tabs with counts, filters, sort, page size, prev/next, all mirrored in the URL; PAID reviewers see
-    requestor + department columns. Verified in the browser for a FREE requestor and a PAID department lead.
+    npm ci
+    npm run lint
+    npm run typecheck
+    npm run e2e:frontend
+    npm run build
 
-Phase 5 (second pass) — escalation routing + mandatory-review queue (done 2026-09-14)
-  * GET /assessments/:id/escalation-targets lists reviewers (same-department or cross-department requestors, never
-    the caller; PAID only). POST decision {type: escalate, escalateToUserId} routes the assessment: the target can
-    read, list (escalatedToMe=true) and decide it even outside their department. Administrators are never targets.
-  * /admin/review: AI-03 mandatory-review queue (confidence below the matrix threshold, still pending) with a
-    read-only inspect dialog (result, flagged facts, decision, transcript). Verified in the browser.
+Database/content, only against the explicitly intended environment, includes content:verify, accuracy, audit:verify, schema:scan, retention dry-run, and guarded rule-migration dry-run. The one-call live AI smoke is explicit, billable, and excluded from ordinary CI.
 
-Phase 5 (third pass) — reconstruction from the audit log (done 2026-09-14)
-  * assessments/reconstruct.ts replays an assessment's audit entries (pure function) into a timeline + state. The
-    endpoint GET /assessments/:id/reconstruct adds a per-entry hash recheck (SEC-07) and a diff against the stored
-    document (FR-30): drift such as an edited fact or score is reported field by field. FREE tenants get a partial
-    rebuild with the missing parts named. Audit role now has /audit/assessments (Stored vs Reconstruct dialogs) and
-    /audit/logs (category/entity filters, payload expand, Verify chain).
+See docs/ai/RequirementsCoverage.md, docs/ai/KnownIssues.md, tasks/sprint-release-readiness.md, and docs/UAT.md for the current evidence boundary.
 
-Phase 6 — reports & analytics, PAID (done 2026-09-14)
-  * modules/reports: four standard reports (volume, classification, override-rate with reasons, assessment-time
-    with median/p95) + trends by department/persona/scenario, all aggregations over assessments, zero-filled
-    periods, cached 1 h per (type, params, caller scope) with a TTL index, feature-gated (reports), requestors
-    department-scoped. CSV (BOM) and PDF (pdfkit, in-process) exports, audited as report.exported.
-  * /admin/analytics (DASH-03): stat tiles, bar chart (volume), status bars (classification), line charts
-    (override rate, median/p95 time, trends), chart/table toggle, CSV/PDF buttons, period/department/persona filters.
-    Colors from the validated reference palette (dataviz skill). npm run seed:demo fills acme with ~700 rows.
-
-Phase 7 — PAID security (done 2026-09-14)
-  * T-080 SSO: tenant sso {providerId, domain} + feature flag (system admin /system/tenant), GET /auth/sso/lookup, login page
-    "Continue with company SSO", OTP skipped for SSO logins of non-privileged roles, JIT provisioning by email domain.
-  * T-082 SEC-05: lib/sensitive.ts registry (class by sector: PHI/financial/PII); administrators/system admins/auditors read
-    free text masked; ?unmask=true returns clear values and writes access.unmasked; exports carry aggregates only.
-  * T-083 SEC-06: modules/retention (flag -> 7-day grace -> FREE reduce to permitted fields / PAID archive + reduce),
-    retentionRuns + assessmentArchives, POST /system/retention/run, npm run retention, in-process nightly scheduler
-    (JOBS_ENABLED) that also verifies every audit chain; /system/retention screen.
-  * T-084 NFR-04: tests/tenant-isolation.test.ts (route sweep across tenants + static scan of every Model query for tenantId).
-  * T-085 SEC-08: docs/ai/ControlMapping.md (GLBA/SOX/AML, HIPAA, NIST 800-53, ISO 27001/42001).
-
-Phase 8 — NFR (done 2026-09-14)
-  * T-090 next-intl (cookie locale, en + partial bn, shell + switcher), T-091 per-route rate limits + helmet/CORS + frontend
-    headers, T-092 load smoke PASS at 100 and 200 users (p95 <= 1.2 s, 0 errors) + index review, T-093 /health/live|ready +
-    alert table, T-094 docs/ai/DRRunbook.md + scripts/dr-drill.sh (local drill 13 s).
-
-Phase 9 — QA (built 2026-09-14; UAT sessions pending)
-  * T-100 Playwright suite 7/7 (risk-sense-ai/e2e), T-101 audit reviewed (ISS-018), T-102 docs/UAT.md, T-103 npm run accuracy
-    (77.6 % on demo data), T-104 release checklist in DeploymentGuide, docs/ai/RequirementsCoverage.md (every id -> evidence).
-
-Test count: backend 138 (vitest + supertest + in-memory mongod). Frontend: typecheck + lint + production build + 7 Playwright e2e.
-
-
-5. KEY DECISIONS (see docs/ai/DecisionLog.md for the full reasoning)
---------------------------------------------------------------------
-01 MERN, two repos            02 Firebase free tier        03 OpenAI structured outputs      04 one frontend, role route groups
-05 Vercel + Render + Atlas    06 Zod -> OpenAPI -> types   07 tenant-aware schema            08 hash-chained audit
-09 copy-on-write versioning   10 rule tie-break            11 defaults for 7 open items      12 dev auth bypass
-13 audit without transactions 14 FREE self-signup          15 strict MFA via email OTP        16 string keys for content
-17 questions edited in place  18 one condition language    19 confidence formula             20 public content fallback
-21 no SSE (one JSON round-trip per turn)                   22 side facts fill gaps only
-23 dashboard ordering + tab counts computed in the DB in one list call
-24 escalation targets = requestors within reach; administrators inspect, never decide
-25 reconstruction = pure replay of audit entries; doubles as the FR-30 conformance check
-26 reports: pdfkit in-process, cache keyed by caller scope, final class = human override
-27 SSO = Firebase providers by email domain; JIT provisioning; OTP skipped only for SSO non-privileged
-28 masking by reader role, unmask audited; retention flag -> grace -> reduce/archive, in-process scheduler
-
-
-6. CONVENTIONS EVERY CONTRIBUTOR MUST FOLLOW
---------------------------------------------
-* Requirement ids (FR-xx, NFR-xx, SEC-xx, AI-xx, DASH-xx) in commits, tests and docs. Rules text: docs/ai/BusinessRules.md.
-* Never put scoring/classification logic in the AI layer. The model extracts and explains only.
-* Never add update/delete paths for auditLogs. Never set assessment status "closed" outside assessments.service.decide().
-* Never edit an active persona/scenario/matrix in place — use the versioned helper.
-* Every request-path query is tenant-scoped. PAID features are gated by tenant.features.*.
-* Frontend talks to the API only through lib/api/client.ts with generated types (npm run gen:api after npm run openapi).
-* All repo content in English. No secrets in git (.env.example only). Do not push unless the owner asks; branch akib.
-* After every task: update docs/ai (API/Database/BusinessRules/project-map), DecisionLog if a choice was made,
-  and write docs/dev-notes/YYYY-MM-DD-<task>.md explaining file by file what/where/why.
-
-
-7. OPEN ITEMS AND KNOWN GAPS
-----------------------------
-Waiting on TAC / Bayshore: answers to the 7 open items (manager review, accuracy definition, retention, HIPAA mapping,
-  uptime, DR/session defaults, latency) — we build to the defaults in BusinessRules §12; real persona/scenario/question
-  content and scoring numbers (our starter content is a stand-in, ISS-008/009); duplicate requirement ids in Draft v1;
-  BAA/DPA paperwork for healthcare tenants (ControlMapping.md).
-Waiting on Travis: Resend domain verification (DKIM/SPF) for real OTP mail; Figma file access for the assistant
-  (ISS-017 — the file is not shared with the connector account; UI is shadcn defaults meanwhile); Render/Vercel/Atlas
-  production deployment (env file in ~/Downloads); GitHub main-branch protection; UptimeRobot / log-drain accounts;
-  SSO provider credentials (Microsoft/OIDC) in the Firebase project; a GitHub remote for this docs repo if wanted.
-Technical, accepted for v1.0.0: npm audit flags next@15.5.25 via postcss (fix only in Next 16) and a transitive uuid
-  advisory (ISS-018); dataset activation is not transactional; SSE streaming deferred (DecisionLog 21); frontend has
-  Playwright e2e but no unit tests; i18n covers the shell only (T-090 rest key by key); T-027 richer editors, T-028
-  department mapping editor, T-064 schema-shape sweep still open; requestor e2e uses the real model (use AI_PROVIDER=mock for CI).
-Data note: the dev Atlas database risksense_dev holds seeded accounts, starter content, 711 demo assessments
-  (versions.aiProvider = "demo") and a few real test intakes. Use a fresh database name for production.
-
-
-8. WHAT COMES NEXT (tasks/backlog.md)
-------------------------------------
-All phases are built and v1.0.0 is tagged. The order of the remaining work:
-  1. Deploy: Atlas M10 (new db risksense_prod) -> Firebase (authorized domains, providers) -> Resend domain ->
-     Render backend -> Vercel frontend, using ~/Downloads/risksense-env-vars.txt and DeploymentGuide "Release checklist".
-     Then npm run seed + seed:content on the production db and user:create for the real admin/sysadmin/audit accounts.
-  2. Post-deploy checks: /api/v1/health/ready, SSL Labs A on both hosts, UptimeRobot, Atlas alerts, PITR drill on staging
-     (DRRunbook.md), load smoke against staging (DeploymentGuide "Load test").
-  3. UAT with TAC/Bayshore using docs/UAT.md; load TAC's real workbook through /admin/datasets (approve with a second admin);
-     re-run npm run accuracy for the real baseline (ISS-019); usability session for NFR-07.
-  4. Polish once Figma is shared: screens per design, T-027 richer flow/condition editors, T-028 department mapping editor,
-     T-064 schema-shape sweep, T-090 remaining strings, system users/departments screens (W10).
-  5. Every future change: branch akib, tests + dev-note + docs, merge to main, tag vX.Y.Z (release checklist step 6).
-
-
-9. HOW TO RE-VERIFY EVERYTHING (copy-paste)
---------------------------------------------
-  cd risk-sense-ai-backend && npm run lint && npm run typecheck && npm test                      # 138 tests
-  cd risk-sense-ai && npm run lint && npm run typecheck && npm run build                        # production build
-  scripts/start-all.sh   (or the two dev servers)  then:  cd risk-sense-ai && npm run e2e         # 7 Playwright tests
-  cd risk-sense-ai-backend && AI_PROVIDER=mock RATE_LIMIT_DISABLED=true PORT=4100 MONGODB_URI=mongodb://127.0.0.1:27017/risksense_load npm run dev
-  cd risk-sense-ai-backend && MONGODB_URI=mongodb://127.0.0.1:27017/risksense_load npm run load:smoke -- --base http://localhost:4100/api/v1 --users 100 --seed-users
-  ./scripts/dr-drill.sh                                                                          # dump/restore/verify
-  cd risk-sense-ai-backend && npm run audit:verify public && npm run accuracy                    # chain + accept rate
+No production deployment, external acceptance, Figma completion, release tag, or push is asserted by this status file.

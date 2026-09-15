@@ -590,6 +590,257 @@
           "retentionPolicy"
         ]
       },
+      "SystemUser": {
+        "type": "object",
+        "properties": {
+          "_id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "requestor",
+              "administrator",
+              "system_administrator",
+              "audit"
+            ]
+          },
+          "departmentIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "crossDepartmentAccess": {
+            "type": "boolean"
+          },
+          "mfaEnrolled": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "disabled"
+            ]
+          },
+          "lastLoginAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "_id",
+          "email",
+          "name",
+          "role",
+          "departmentIds",
+          "crossDepartmentAccess",
+          "mfaEnrolled",
+          "status",
+          "lastLoginAt"
+        ]
+      },
+      "SystemPersona": {
+        "type": "object",
+        "properties": {
+          "_id": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "sector": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "tenant",
+              "shared"
+            ]
+          }
+        },
+        "required": [
+          "_id",
+          "key",
+          "name",
+          "sector",
+          "source"
+        ]
+      },
+      "SystemDepartment": {
+        "type": "object",
+        "properties": {
+          "_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "personaIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "_id",
+          "name",
+          "personaIds"
+        ]
+      },
+      "DrStatus": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "nullable": true
+          },
+          "backupsEnabled": {
+            "type": "boolean"
+          },
+          "lastBackupAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastRestoreDrillAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastRestoreDrillOutcome": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "passed",
+              "failed"
+            ]
+          },
+          "evidenceRef": {
+            "type": "string",
+            "nullable": true
+          },
+          "targets": {
+            "type": "object",
+            "properties": {
+              "backupFrequencyHours": {
+                "type": "number"
+              },
+              "rpoHours": {
+                "type": "number"
+              },
+              "rtoHours": {
+                "type": "number"
+              },
+              "drillFrequencyDays": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "backupFrequencyHours",
+              "rpoHours",
+              "rtoHours",
+              "drillFrequencyDays"
+            ]
+          },
+          "checks": {
+            "type": "object",
+            "properties": {
+              "backupFresh": {
+                "type": "boolean"
+              },
+              "drillCurrent": {
+                "type": "boolean"
+              },
+              "externalEvidenceRecorded": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "backupFresh",
+              "drillCurrent",
+              "externalEvidenceRecorded"
+            ]
+          },
+          "readiness": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "attention_required"
+            ]
+          },
+          "updatedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "provider",
+          "backupsEnabled",
+          "lastBackupAt",
+          "lastRestoreDrillAt",
+          "lastRestoreDrillOutcome",
+          "evidenceRef",
+          "targets",
+          "checks",
+          "readiness",
+          "updatedAt"
+        ]
+      },
+      "ConformanceRun": {
+        "type": "object",
+        "properties": {
+          "tenantId": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "ranAt": {
+            "type": "string"
+          },
+          "trigger": {
+            "type": "string"
+          },
+          "scanned": {
+            "type": "number"
+          },
+          "valid": {
+            "type": "number"
+          },
+          "flagged": {
+            "type": "number"
+          },
+          "resolved": {
+            "type": "number"
+          },
+          "durationMs": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "tenantId",
+          "slug",
+          "ranAt",
+          "trigger",
+          "scanned",
+          "valid",
+          "flagged",
+          "resolved",
+          "durationMs"
+        ]
+      },
       "RetentionRunResult": {
         "type": "object",
         "properties": {
@@ -614,6 +865,12 @@
               "auditDays": {
                 "type": "number"
               },
+              "evidenceDays": {
+                "type": "number"
+              },
+              "datasetHistoryDays": {
+                "type": "number"
+              },
               "graceDays": {
                 "type": "number"
               }
@@ -621,6 +878,8 @@
             "required": [
               "assessmentDays",
               "auditDays",
+              "evidenceDays",
+              "datasetHistoryDays",
               "graceDays"
             ]
           },
@@ -686,6 +945,9 @@
                         "auth": {
                           "type": "string"
                         },
+                        "mail": {
+                          "type": "string"
+                        },
                         "version": {
                           "type": "string"
                         },
@@ -698,8 +960,167 @@
                         "db",
                         "openai",
                         "auth",
+                        "mail",
                         "version",
                         "uptimeSec"
+                      ]
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/live": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Process liveness (no dependency checks)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "ok"
+                          ]
+                        },
+                        "uptimeSec": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "uptimeSec"
+                      ]
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Database readiness with a live ping",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "ok"
+                          ]
+                        },
+                        "db": {
+                          "type": "string",
+                          "enum": [
+                            "connected"
+                          ]
+                        },
+                        "dbPingMs": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "db",
+                        "dbPingMs"
+                      ]
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database is not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "degraded"
+                          ]
+                        },
+                        "db": {
+                          "type": "string"
+                        },
+                        "dbPingMs": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "db",
+                        "dbPingMs"
                       ]
                     },
                     "meta": {
@@ -868,7 +1289,7 @@
             }
           },
           "401": {
-            "description": "UNAUTHENTICATED | OTP_REQUIRED | OTP_INVALID | OTP_EXPIRED",
+            "description": "UNAUTHENTICATED | SSO_REQUIRED | OTP_REQUIRED | OTP_INVALID | OTP_EXPIRED",
             "content": {
               "application/json": {
                 "schema": {
@@ -1076,6 +1497,18 @@
             "required": false,
             "name": "cursorSeq",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "required": false,
+            "name": "unmask",
+            "in": "query"
           }
         ],
         "responses": {
@@ -1164,6 +1597,147 @@
                         "ok",
                         "checked"
                       ]
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audit-logs/archive": {
+      "post": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "to": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "maxRecords": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10000,
+                    "default": 5000
+                  }
+                },
+                "required": [
+                  "from",
+                  "to"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Bounded clear-text audit export plus immutable manifest/hash (system_administrator, fullAudit)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "manifest": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "nullable": true
+                          }
+                        },
+                        "records": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": {
+                              "nullable": true
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "manifest",
+                        "records"
+                      ]
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audit-logs/archive-manifests": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Immutable audit cold-storage export manifests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "nullable": true
+                        }
+                      }
                     },
                     "meta": {
                       "type": "object",
@@ -6132,6 +6706,61 @@
         }
       }
     },
+    "/rules/{id}/history": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "All versions in the logical rule group, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Rule"
+                      }
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/rules/{id}/approve": {
       "post": {
         "security": [
@@ -6158,10 +6787,14 @@
                 "properties": {
                   "changeRef": {
                     "type": "string",
+                    "minLength": 1,
                     "maxLength": 200
                   }
                 },
-                "default": {}
+                "required": [
+                  "changeRef"
+                ],
+                "additionalProperties": false
               }
             }
           }
@@ -21252,10 +21885,14 @@
                 "properties": {
                   "changeRef": {
                     "type": "string",
+                    "minLength": 1,
                     "maxLength": 200
                   }
                 },
-                "default": {}
+                "required": [
+                  "changeRef"
+                ],
+                "additionalProperties": false
               }
             }
           }
@@ -21560,7 +22197,7 @@
         },
         "responses": {
           "201": {
-            "description": "Started; persona set or candidates offered; first question when scenario chosen",
+            "description": "Started; a user-selected persona continues, while an AI proposal pauses for explicit confirmation or override before scenario questions",
             "content": {
               "application/json": {
                 "schema": {
@@ -23073,6 +23710,747 @@
                   "properties": {
                     "data": {
                       "$ref": "#/components/schemas/TenantSettings"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/users": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tenant users (system_administrator)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SystemUser"
+                      }
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "maxLength": 254,
+                    "format": "email"
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 120
+                  },
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "requestor",
+                      "administrator",
+                      "system_administrator",
+                      "audit"
+                    ]
+                  },
+                  "departmentIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-f\\d]{24}$"
+                    },
+                    "maxItems": 50,
+                    "default": []
+                  },
+                  "crossDepartmentAccess": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                },
+                "required": [
+                  "email",
+                  "name",
+                  "role"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Pre-provisioned tenant user with exactly one role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/SystemUser"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/users/{id}": {
+      "patch": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f\\d]{24}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 120
+                  },
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "requestor",
+                      "administrator",
+                      "system_administrator",
+                      "audit"
+                    ]
+                  },
+                  "departmentIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-f\\d]{24}$"
+                    },
+                    "maxItems": 50
+                  },
+                  "crossDepartmentAccess": {
+                    "type": "boolean"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "disabled"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "User updated; role/status changes terminate active sessions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/SystemUser"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/personas": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Effective active persona catalog for department mapping",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SystemPersona"
+                      }
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/departments": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tenant department/persona mappings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SystemDepartment"
+                      }
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 120
+                  },
+                  "personaIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-f\\d]{24}$"
+                    },
+                    "maxItems": 100,
+                    "default": []
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Department created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/SystemDepartment"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/departments/{id}": {
+      "patch": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f\\d]{24}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 120
+                  },
+                  "personaIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-f\\d]{24}$"
+                    },
+                    "maxItems": 100,
+                    "default": []
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Department/persona mapping updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/SystemDepartment"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/dr/status": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "External backup/PITR evidence and readiness against NFR-06 targets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/DrStatus"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 120
+                  },
+                  "backupsEnabled": {
+                    "type": "boolean"
+                  },
+                  "lastBackupAt": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "lastRestoreDrillAt": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "lastRestoreDrillOutcome": {
+                    "type": "string",
+                    "enum": [
+                      "passed",
+                      "failed"
+                    ]
+                  },
+                  "evidenceRef": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 2000,
+                    "format": "uri"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Operator-recorded external DR evidence; audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/DrStatus"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/conformance/run": {
+      "post": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scan all stored tenant assessments and flag schema/invariant failures (FR-30)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ConformanceRun"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/conformance/runs": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Last 30 conformance scans",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ConformanceRun"
+                      }
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/conformance/flags": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": [],
+            "sessionId": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "required": false,
+            "name": "includeResolved",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current or historical assessment conformance flags",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "nullable": true
+                        }
+                      }
                     },
                     "meta": {
                       "type": "object",
