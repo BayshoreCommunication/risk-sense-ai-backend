@@ -102,6 +102,9 @@ export const authenticate: RequestHandler = async (req, _res, next) => {
     mfaEnrolled: user.mfaEnrolled || tokenMfa,
     signInProvider,
   };
+  // Keep current-login assurance separate from the historical enrollment flag. A prior MFA
+  // enrollment must not make a later single-factor PAID SSO login count as MFA.
+  req.identityMfa = tokenMfa;
   req.tenant = {
     id: String(tenant._id),
     slug: tenant.slug,

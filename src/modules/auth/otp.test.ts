@@ -70,6 +70,10 @@ describe('email OTP second factor', () => {
     expect(good.status).toBe(201);
     expect(good.body.data.user.mfaEnrolled).toBe(true);
     expect((await UserModel.findOne({ email: 'one@x.com' }))?.mfaEnrolled).toBe(true);
+    expect((await SessionModel.findOne({ sessionId: good.body.data.sessionId }).lean())?.loginAssurance).toMatchObject({
+      method: 'risk_sense_otp',
+      mfaVerifiedAt: expect.any(Date),
+    });
     expect(await AuditLogModel.countDocuments({ action: 'auth.otp_verified' })).toBe(1);
   });
 

@@ -17,6 +17,7 @@ import { app, login, seeded } from '../../tests/helpers';
 import { AuditLogModel } from '../audit/model';
 import { TenantModel } from '../tenants/model';
 import { UserModel } from '../users/model';
+import { SessionModel } from './model';
 
 describe('SSO via Firebase OIDC/OAuth providers [FR-03, SEC-03]', () => {
   beforeEach(async () => {
@@ -34,8 +35,8 @@ describe('SSO via Firebase OIDC/OAuth providers [FR-03, SEC-03]', () => {
     expect((await request(app).get('/api/v1/auth/sso/lookup').query({ email: 'not-an-email' })).status).toBe(400);
   });
 
-  it('an unknown user on the SSO domain is provisioned into that tenant and skips the email OTP', async () => {
-    const res = await bearer('uid:sso-1:jane@acme.com:-:oidc.acme');
+  it('an unknown user with configured SSO plus Firebase MFA is provisioned without an email challenge', async () => {
+    const res = await bearer('uid:sso-1:jane@acme.com:mfa:oidc.acme');
     expect(res.status).toBe(201);
     expect(res.body.data.tenant.slug).toBe('acme');
     expect(res.body.data.user.role).toBe('requestor');
@@ -44,11 +45,57 @@ describe('SSO via Firebase OIDC/OAuth providers [FR-03, SEC-03]', () => {
     const signup = await AuditLogModel.findOne({ action: 'auth.self_signup', 'entity.id': String(user!._id) }).lean();
     expect(signup!.payload).toMatchObject({ tenant: 'acme', viaSso: true });
     const created = await AuditLogModel.findOne({ action: 'session.created', actorUserId: user!._id }).lean();
-    expect(created!.payload).toMatchObject({ signInProvider: 'oidc.acme' });
+    expect(created!.payload).toMatchObject({ signInProvider: 'oidc.acme', authenticationMethod: 'firebase_mfa' });
+    expect((await SessionModel.findOne({ sessionId: res.body.data.sessionId }).lean())?.loginAssurance).toMatchObject({
+      method: 'firebase_mfa',
+      mfaVerifiedAt: expect.any(Date),
+    });
   });
 
-  it('paid requestors must use configured SSO; privileged roles also complete OTP [FR-03, SEC-03]', async () => {
-    await bearer('uid:sso-2:bob@acme.com:-:oidc.acme');
+  it('fails closed for legacy paid sessions and lets a compliant re-login replace them [SEC-02, SEC-03]', async () => {
+    const token = 'uid:legacy-paid:legacy@acme.com:mfa:oidc.acme';
+    const login = await bearer(token);
+    expect(login.status).toBe(201);
+    const legacySessionId = login.body.data.sessionId as string;
+    const user = await UserModel.findOne({ firebaseUid: 'legacy-paid' }).lean();
+    expect(user?.mfaEnrolled).toBe(true);
+
+    const priorLastSeenAt = new Date(Date.now() - 60_000);
+    await SessionModel.collection.updateOne(
+      { sessionId: legacySessionId },
+      {
+        $unset: { loginAssurance: '' },
+        $set: { lastSeenAt: priorLastSeenAt, expiresAt: new Date(Date.now() + 10 * 60_000) },
+      },
+    );
+    const denied = await request(app)
+      .get('/api/v1/me')
+      // A later token and historical enrollment must not upgrade an unclassified legacy session.
+      .set('Authorization', 'Bearer uid:legacy-paid:legacy@acme.com:-:oidc.acme')
+      .set('X-Session-Id', legacySessionId);
+    expect(denied.status).toBe(401);
+    expect(denied.body.error.code).toBe('SESSION_INVALID');
+    const unchanged = await SessionModel.findOne({ sessionId: legacySessionId }).lean();
+    expect(unchanged?.lastSeenAt.getTime()).toBe(priorLastSeenAt.getTime());
+    expect(unchanged?.terminatedAt).toBeUndefined();
+
+    // An invalid legacy row cannot deadlock a tenant whose policy blocks concurrent logins.
+    await TenantModel.updateOne({ slug: 'acme' }, { $set: { 'features.blockConcurrentLogin': true } });
+    const replacement = await bearer(token);
+    expect(replacement.status).toBe(201);
+    expect((await SessionModel.findOne({ sessionId: legacySessionId }).lean())?.terminationReason).toBe('superseded');
+    expect((await SessionModel.findOne({ sessionId: replacement.body.data.sessionId }).lean())?.loginAssurance).toMatchObject({
+      method: 'firebase_mfa',
+      mfaVerifiedAt: expect.any(Date),
+    });
+  });
+
+  it('paid requestors may use Firebase MFA while managed operators complete RiskSense OTP [FR-03, SEC-03]', async () => {
+    const missingMfa = await bearer('uid:sso-2:bob@acme.com:-:oidc.acme');
+    expect(missingMfa.status).toBe(401);
+    expect(missingMfa.body.error.code).toBe('OTP_REQUIRED');
+    const withMfa = await bearer('uid:sso-2:bob@acme.com:mfa:oidc.acme');
+    expect(withMfa.status).toBe(201);
     const pw = await bearer('uid:sso-2:bob@acme.com:-:password');
     expect(pw.status).toBe(401);
     expect(pw.body.error.code).toBe('SSO_REQUIRED');
@@ -57,6 +104,24 @@ describe('SSO via Firebase OIDC/OAuth providers [FR-03, SEC-03]', () => {
     const admin = await bearer('uid:sso-admin-uid:ops@acme.com:-:oidc.acme');
     expect(admin.status).toBe(401);
     expect(admin.body.error.code).toBe('OTP_REQUIRED');
+    // Audit is a managed PAID role and must not fall through when optional tenant OTP is disabled.
+    await TenantModel.updateOne({ slug: 'acme' }, { $set: { 'authPolicy.otpRequired': false } });
+    await UserModel.create({ firebaseUid: 'dev:sso-audit', email: 'audit@acme.com', name: 'Acme Audit', role: 'audit', tenantId: (await TenantModel.findOne({ slug: 'acme' }))!._id });
+    // Even a current Firebase-MFA claim cannot replace the RiskSense-controlled factor for audit.
+    const audit = await bearer('uid:sso-audit-uid:audit@acme.com:mfa:oidc.acme');
+    expect(audit.status).toBe(401);
+    expect(audit.body.error.code).toBe('OTP_REQUIRED');
+    const issued = await request(app)
+      .post('/api/v1/auth/otp/request')
+      .set('Authorization', 'Bearer uid:sso-audit-uid:audit@acme.com:-:oidc.acme');
+    const auditLogin = await bearer('uid:sso-audit-uid:audit@acme.com:-:oidc.acme').send({
+      otpCode: issued.body.data.devCode,
+    });
+    expect(auditLogin.status).toBe(201);
+    expect((await SessionModel.findOne({ sessionId: auditLogin.body.data.sessionId }).lean())?.loginAssurance).toMatchObject({
+      method: 'risk_sense_otp',
+      mfaVerifiedAt: expect.any(Date),
+    });
     // SSO disabled on the tenant → the provider match no longer counts
     await TenantModel.updateOne({ slug: 'acme' }, { $set: { 'features.sso': false } });
     const off = await bearer('uid:sso-2:bob@acme.com:-:oidc.acme');

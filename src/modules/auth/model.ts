@@ -1,6 +1,17 @@
 import { Schema, model, type InferSchemaType } from 'mongoose';
 
 export const TERMINATION_REASONS = ['timeout', 'logout', 'superseded', 'admin', 'role_changed'] as const;
+export const SESSION_AUTHENTICATION_METHODS = ['single_factor', 'firebase_mfa', 'risk_sense_otp', 'development_bypass'] as const;
+export type SessionAuthenticationMethod = (typeof SESSION_AUTHENTICATION_METHODS)[number];
+
+const loginAssuranceSchema = new Schema(
+  {
+    method: { type: String, enum: SESSION_AUTHENTICATION_METHODS, required: true },
+    // Present only when this exact session exchange proved an approved second factor.
+    mfaVerifiedAt: { type: Date },
+  },
+  { _id: false },
+);
 
 /**
  * Application session (SEC-02, FR-04). Distinct from the Firebase token: this is what enforces
@@ -17,6 +28,9 @@ const sessionSchema = new Schema(
     expiresAt: { type: Date, required: true }, // lastSeenAt + idleTimeout; TTL index cleans up stale docs
     terminatedAt: { type: Date },
     terminationReason: { type: String, enum: TERMINATION_REASONS },
+    // Required for newly minted sessions. Legacy rows without it are rejected by touch() so they
+    // cannot inherit current-login assurance from users.mfaEnrolled or a later Firebase token.
+    loginAssurance: { type: loginAssuranceSchema, required: true },
     userAgent: { type: String },
     ip: { type: String },
   },

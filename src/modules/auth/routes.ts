@@ -12,6 +12,7 @@ import { audit } from '../audit/service';
 import { PRIVILEGED_ROLES } from '../users/model';
 import { usersService } from '../users/service';
 import { otpService } from './otp.service';
+import { requiresCurrentLoginMfa } from './policy';
 import { ConcurrentSessionBlockedError, sessionService } from './service';
 
 export const authRouter = Router();
@@ -47,12 +48,20 @@ authRouter.post('/otp/request', authenticate, async (req, res) => {
  */
 authRouter.post('/session', sessionLimiter, authenticate, validate({ body: CreateSessionBody }), async (req, res) => {
   const viaFirebase = Boolean(req.header('authorization'));
-  // FR-03: a login through the tenant's configured SSO provider brings the IdP's own MFA, so the email OTP is
-  // skipped — except for privileged roles, which always complete our second factor (SEC-03, DecisionLog 15).
+  // Firebase's verified second-factor claim on a configured SSO sign-in satisfies a requestor's
+  // second factor. Raw upstream SAML/OIDC attributes are not trusted without a tenant-specific
+  // mapping; absent this Firebase claim, PAID requestors fall back to the RiskSense email code.
+  // Privileged roles always complete the RiskSense-controlled factor (SEC-03, DecisionLog 15).
   const t = req.tenant!;
   const viaSso = viaFirebase && t.features.sso && Boolean(t.sso.providerId) && req.user!.signInProvider === t.sso.providerId;
   const privileged = PRIVILEGED_ROLES.includes(req.user!.role);
-  const otpRequired = viaFirebase && (privileged || (t.authPolicy.otpRequired && !viaSso));
+  // A managed audit account exists only on PAID and must also complete a RiskSense-controlled
+  // second factor. Every other PAID account has either the Firebase MFA claim or this fallback.
+  const paidAudit = t.plan === 'paid' && req.user!.role === 'audit';
+  const ssoFirebaseMfaSatisfied = viaSso && req.user!.role === 'requestor' && Boolean(req.identityMfa);
+  const otpRequired =
+    viaFirebase &&
+    (privileged || paidAudit || (requiresCurrentLoginMfa(req.user!, t) && !ssoFirebaseMfaSatisfied));
   const { otpCode } = req.body as z.infer<typeof CreateSessionBody>;
   if (otpRequired) {
     if (!otpCode) throw new AppError('OTP_REQUIRED', 'A verification code is required to sign in');
@@ -66,6 +75,13 @@ authRouter.post('/session', sessionLimiter, authenticate, validate({ body: Creat
       if (otpRequired && !(await otpService.verify(req.user!, otpCode!))) return null;
       if (viaFirebase) await usersService.finalizeIdentityLink(req.user!.id, req.user!.firebaseUid, req.user!);
       return sessionService.create(req.user!, req.tenant!, {
+        authenticationMethod: !viaFirebase
+          ? 'development_bypass'
+          : otpRequired
+            ? 'risk_sense_otp'
+            : ssoFirebaseMfaSatisfied
+              ? 'firebase_mfa'
+              : 'single_factor',
         userAgent: req.header('user-agent'),
         ip: req.ip,
         signInProvider: req.user!.signInProvider ?? (viaFirebase ? 'firebase' : 'dev'),

@@ -40,6 +40,14 @@ describe('Firebase bearer login', () => {
     expect(res.body.data.tenant.slug).toBe('public');
     const user = await UserModel.findOne({ firebaseUid: 'abc123' });
     expect(user?.email).toBe('new.person@gmail.com');
+    expect((await SessionModel.findOne({ sessionId: res.body.data.sessionId }).lean())?.loginAssurance).toMatchObject({
+      method: 'single_factor',
+    });
+    const me = await request(app)
+      .get('/api/v1/me')
+      .set('Authorization', 'Bearer uid:abc123:new.person@gmail.com')
+      .set('X-Session-Id', res.body.data.sessionId);
+    expect(me.status).toBe(200);
     const signup = await AuditLogModel.findOne({ action: 'auth.self_signup' });
     expect(signup).toBeTruthy();
   });

@@ -1,12 +1,12 @@
 import type { RequestHandler } from 'express';
 import { AppError } from '../lib/errors';
-import { PRIVILEGED_ROLES, type Role } from '../modules/users/model';
+import type { Role } from '../modules/users/model';
 import type { TenantFeatures } from '../modules/tenants/model';
 import { audit } from '../modules/audit/service';
 
 /**
  * Least-privilege role gate (SEC-01). Denied attempts are audited as `access.denied`.
- * Admin roles must have MFA enrolled to reach anything privileged (SEC-03).
+ * Current-login MFA assurance is enforced for every protected request by session middleware.
  */
 export function requireRole(...roles: Role[]): RequestHandler {
   return async (req, _res, next) => {
@@ -22,9 +22,6 @@ export function requireRole(...roles: Role[]): RequestHandler {
         payload: { requiredRoles: roles },
       });
       throw new AppError('FORBIDDEN', 'Role not permitted');
-    }
-    if (PRIVILEGED_ROLES.includes(user.role) && !user.mfaEnrolled) {
-      throw new AppError('MFA_REQUIRED', 'Multi-factor authentication must be enrolled for this role');
     }
     next();
   };

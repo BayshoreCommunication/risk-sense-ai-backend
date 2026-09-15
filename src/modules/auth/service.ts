@@ -1,18 +1,47 @@
 import { nanoid } from 'nanoid';
+import { env, isProd } from '../../config/env';
 import { RetryableTransactionCollisionError, isMongoDuplicateKeyFor, withMongoTransaction } from '../../lib/db';
 import { AppError } from '../../lib/errors';
 import type { AuthTenant, AuthUser } from '../../middleware/auth';
 import { audit } from '../audit/service';
 import { UserModel } from '../users/model';
-import { SessionModel } from './model';
+import {
+  SESSION_AUTHENTICATION_METHODS,
+  SessionModel,
+  type SessionAuthenticationMethod,
+} from './model';
+import { allowedSessionAuthenticationMethods } from './policy';
 
 interface Meta {
+  authenticationMethod: SessionAuthenticationMethod;
   userAgent?: string;
   ip?: string;
   signInProvider?: string; // FR-03: which first factor produced this session
 }
 
+interface TouchPolicy {
+  allowDevelopmentBypass: boolean;
+}
+
 const minutes = (n: number) => n * 60 * 1000;
+
+function assuranceSatisfiesPolicy(
+  assurance: { method?: string; mfaVerifiedAt?: Date | null } | null | undefined,
+  user: AuthUser,
+  tenant: AuthTenant,
+  policy: TouchPolicy,
+): boolean {
+  if (
+    !assurance?.method ||
+    !SESSION_AUTHENTICATION_METHODS.includes(assurance.method as SessionAuthenticationMethod)
+  ) {
+    return false;
+  }
+  if (assurance.method === 'development_bypass') return policy.allowDevelopmentBypass;
+  const method = assurance.method as SessionAuthenticationMethod;
+  if (!allowedSessionAuthenticationMethods(user, tenant).includes(method)) return false;
+  return method === 'single_factor' || Boolean(assurance.mfaVerifiedAt);
+}
 
 /** Expected policy rejection; the route records its audit only after the auth transaction rolls back. */
 export class ConcurrentSessionBlockedError extends Error {
@@ -42,16 +71,39 @@ export const sessionService = {
    * - default: supersede the oldest active session(s) so the newest login wins;
    * - tenant.features.blockConcurrentLogin (FR-04): reject the new login instead.
    */
-  async create(user: AuthUser, tenant: AuthTenant, meta: Meta = {}) {
+  async create(user: AuthUser, tenant: AuthTenant, meta: Meta) {
+    const assurancePolicy: TouchPolicy = {
+      // The only caller that selects this discriminator is the explicit, non-production dev path.
+      allowDevelopmentBypass: env.AUTH_DEV_BYPASS && !isProd,
+    };
+    const proposedAssurance = {
+      method: meta.authenticationMethod,
+      ...(['firebase_mfa', 'risk_sense_otp'].includes(meta.authenticationMethod) ? { mfaVerifiedAt: new Date() } : {}),
+    };
+    if (!assuranceSatisfiesPolicy(proposedAssurance, user, tenant, assurancePolicy)) {
+      throw new AppError('MFA_REQUIRED', 'Authentication method does not satisfy the current-login policy');
+    }
     return serialized(user.id, () =>
       withMongoTransaction(async () => {
         const max = tenant.sessionPolicy.maxConcurrentSessions;
         for (let pass = 0; pass < max + 2; pass++) {
           const active = await SessionModel.find({ userId: user.id, terminatedAt: null }).sort({ lastSeenAt: 1 });
           const now = new Date();
-          const live = active.filter((session) => session.expiresAt > now);
           const stale = active.filter((session) => session.expiresAt <= now);
+          const assuranceInvalid = active.filter(
+            (session) =>
+              session.expiresAt > now &&
+              !assuranceSatisfiesPolicy(session.loginAssurance, user, tenant, assurancePolicy),
+          );
           for (const session of stale) await this.terminate(session.sessionId, 'timeout', user);
+          // A legacy or now-under-assured session must not permanently block a compliant re-login
+          // when the tenant uses blockConcurrentLogin. The successful new exchange supersedes it.
+          for (const session of assuranceInvalid) await this.terminate(session.sessionId, 'superseded', user);
+          const live = active.filter(
+            (session) =>
+              session.expiresAt > now &&
+              assuranceSatisfiesPolicy(session.loginAssurance, user, tenant, assurancePolicy),
+          );
 
           if (live.length >= max) {
             if (tenant.features.blockConcurrentLogin) throw new ConcurrentSessionBlockedError(live.length);
@@ -73,6 +125,10 @@ export const sessionService = {
               slot,
               lastSeenAt: now,
               expiresAt: new Date(now.getTime() + minutes(tenant.sessionPolicy.idleTimeoutMin)),
+              loginAssurance: {
+                method: meta.authenticationMethod,
+                ...(['firebase_mfa', 'risk_sense_otp'].includes(meta.authenticationMethod) ? { mfaVerifiedAt: now } : {}),
+              },
               userAgent: meta.userAgent,
               ip: meta.ip,
             });
@@ -88,7 +144,11 @@ export const sessionService = {
             action: 'session.created',
             actor: user,
             entity: { type: 'session', id: sessionId },
-            payload: { userAgent: meta.userAgent, signInProvider: meta.signInProvider ?? null },
+            payload: {
+              userAgent: meta.userAgent,
+              signInProvider: meta.signInProvider ?? null,
+              authenticationMethod: meta.authenticationMethod,
+            },
           });
           return session;
         }
@@ -98,13 +158,25 @@ export const sessionService = {
   },
 
   /** Validates + extends the session on every request; expired → terminate + 401 SESSION_EXPIRED. */
-  async touch(sessionId: string, user: AuthUser, tenant: AuthTenant) {
+  async touch(sessionId: string, user: AuthUser, tenant: AuthTenant, policy: TouchPolicy) {
     const session = await SessionModel.findOne({ sessionId, userId: user.id });
     if (!session || session.terminatedAt) throw new AppError('SESSION_INVALID', 'Session is not active');
     const now = new Date();
     if (session.expiresAt <= now) {
       await this.terminate(sessionId, 'timeout', user);
       throw new AppError('SESSION_EXPIRED', 'Session expired after inactivity');
+    }
+    const assurance = session.loginAssurance;
+    // There is no trustworthy way to infer how a legacy session was authenticated. Re-login is
+    // safer than upgrading it from historical enrollment or a claim on a later request.
+    if (!assurance?.method) {
+      throw new AppError('SESSION_INVALID', 'Session predates current-login assurance; sign in again');
+    }
+    if (assurance.method === 'development_bypass' && !policy.allowDevelopmentBypass) {
+      throw new AppError('SESSION_INVALID', 'Development authentication is not valid for this request');
+    }
+    if (!assuranceSatisfiesPolicy(assurance, user, tenant, policy)) {
+      throw new AppError('SESSION_INVALID', 'Session lacks current-login MFA assurance; sign in again');
     }
     session.lastSeenAt = now;
     session.expiresAt = new Date(now.getTime() + minutes(tenant.sessionPolicy.idleTimeoutMin));

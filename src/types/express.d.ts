@@ -6,6 +6,8 @@ declare global {
       user?: AuthUser;
       tenant?: AuthTenant;
       sessionId?: string;
+      /** True only when the identity token for this request proves a second factor. */
+      identityMfa?: boolean;
     }
   }
 }

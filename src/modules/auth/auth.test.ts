@@ -26,6 +26,9 @@ describe('auth & sessions', () => {
     expect(me.status).toBe(200);
     expect(me.body.data.user.role).toBe('requestor');
     expect(me.body.data.tenant.plan).toBe('free');
+    expect((await SessionModel.findOne({ sessionId: headers['X-Session-Id'] }).lean())?.loginAssurance).toMatchObject({
+      method: 'development_bypass',
+    });
   });
 
   it('requires X-Session-Id after login [SEC-02]', async () => {
@@ -170,11 +173,46 @@ describe('auth & sessions', () => {
     expect(res.body.error.code).toBe('FORBIDDEN');
   });
 
-  it('requires MFA for administrator roles [SEC-03]', async () => {
+  it('keeps the explicit non-production dev bypass independent of historical MFA enrollment [SEC-03]', async () => {
     await UserModel.updateOne({ email: 'admin@dev.local' }, { $set: { mfaEnrolled: false } });
     const headers = await login('admin@dev.local');
     const res = await request(app).get('/api/v1/audit-logs').set(headers);
-    expect(res.status).toBe(403);
-    expect(res.body.error.code).toBe('MFA_REQUIRED');
+    expect(res.status).toBe(200);
+    expect((await SessionModel.findOne({ sessionId: headers['X-Session-Id'] }).lean())?.loginAssurance).toMatchObject({
+      method: 'development_bypass',
+    });
+  });
+
+  it('rejects forged Firebase-MFA assurance for roles that require RiskSense OTP [SEC-03]', async () => {
+    const acme = await TenantModel.findOne({ slug: 'acme' });
+    await UserModel.create({
+      firebaseUid: 'dev:audit@paid.local',
+      email: 'audit@paid.local',
+      name: 'Paid Auditor',
+      role: 'audit',
+      tenantId: acme!._id,
+    });
+
+    for (const email of ['admin@dev.local', 'sysadmin@dev.local', 'audit@paid.local']) {
+      const headers = await login(email);
+      const lastSeenAt = new Date(Date.now() - 60_000);
+      await SessionModel.collection.updateOne(
+        { sessionId: headers['X-Session-Id'] },
+        {
+          $set: {
+            loginAssurance: { method: 'firebase_mfa', mfaVerifiedAt: new Date() },
+            lastSeenAt,
+          },
+        },
+      );
+
+      const denied = await request(app).get('/api/v1/me').set(headers);
+      expect(denied.status, email).toBe(401);
+      expect(denied.body.error.code, email).toBe('SESSION_INVALID');
+      expect(
+        (await SessionModel.findOne({ sessionId: headers['X-Session-Id'] }).lean())?.lastSeenAt.getTime(),
+        email,
+      ).toBe(lastSeenAt.getTime());
+    }
   });
 });
