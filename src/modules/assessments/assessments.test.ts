@@ -10,7 +10,7 @@ import { AssessmentModel } from './model';
 
 /**
  * End-to-end intake with the deterministic mock AI (AI_PROVIDER=mock in tests) and the starter content
- * (3 personas, 13 scenarios, 64 questions, matrix + hard rules) loaded through the dataset flow.
+ * (3 personas, 13 scenarios, 76 questions, matrix + hard rules) loaded through the dataset flow.
  */
 describe('assessments — intake → submit → decision', () => {
   let requestor: Record<string, string>;
