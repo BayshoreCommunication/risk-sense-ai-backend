@@ -127,7 +127,7 @@ describe('escalation targets and mandatory review [T-061, AI-03, DASH-04]', () =
     expect(all.body.data.counts).toMatchObject({ awaiting_decision: 1, closed: 1, pending: 1 });
     const queue = await request(app).get('/api/v1/assessments').set(finReq).query({ mandatoryReview: 'true', pending: 'true' });
     expect(queue.body.data.items.map((r: { result: { confidence: number } }) => r.result.confidence)).toEqual([35]);
-    // an administrator of the public tenant sees nothing from acme (tenant isolation, NFR-04); Acme's administrator sees the queue tenant-wide
+    // an administrator of the separate TAC tenant sees nothing from Acme (tenant isolation, NFR-04); Acme's administrator sees the queue tenant-wide
     const admin = await login('admin@dev.local');
     expect((await request(app).get('/api/v1/assessments').set(admin).query({ mandatoryReview: 'true' })).body.data.total).toBe(0);
     const acmeAdmin = await login('admin@paid.local');

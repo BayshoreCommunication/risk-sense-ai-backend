@@ -140,7 +140,7 @@ describe('SSO via Firebase OIDC/OAuth providers [FR-03, SEC-03]', () => {
     const sysadmin = await login('sysadmin@dev.local');
     const before = await request(app).get('/api/v1/system/tenant').set(sysadmin);
     expect(before.status).toBe(200);
-    expect(before.body.data).toMatchObject({ slug: 'public', plan: 'free', sso: { providerId: null, domain: null } });
+    expect(before.body.data).toMatchObject({ slug: 'tac', plan: 'paid', sso: { providerId: null, domain: null } });
     // enabling SSO without a domain is refused
     const bad = await request(app).patch('/api/v1/system/tenant').set(sysadmin).send({ features: { sso: true } });
     expect(bad.status).toBe(400);

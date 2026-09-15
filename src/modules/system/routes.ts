@@ -10,6 +10,7 @@ import { validate } from '../../middleware/validate';
 import { audit } from '../audit/service';
 import { conformanceService } from '../conformance/service';
 import { TenantModel, type Tenant } from '../tenants/model';
+import { UserModel } from '../users/model';
 import { ConformanceFlagsQuery, DrStatusPatch, SystemDepartmentCreate, SystemDepartmentPatch, SystemIdParams, SystemUserCreate, SystemUserPatch, TenantPatch } from './schema';
 import { directoryService } from './directory.service';
 import { DrStatusModel, FIXED_DR_TARGETS } from './dr.model';
@@ -148,6 +149,10 @@ systemRouter.patch('/tenant', validate({ body: TenantPatch }), async (req, res) 
   const t = await TenantModel.findById(req.user!.tenantId);
   if (!t) throw new AppError('NOT_FOUND', 'tenant');
   const before = view(t);
+  if (body.plan === 'free' && t.plan !== 'free') {
+    const managedAccount = await UserModel.exists({ tenantId: t._id, role: { $ne: 'requestor' } });
+    if (managedAccount) throw new AppError('CONFLICT', 'Remove or convert managed-role accounts before changing this tenant to FREE');
+  }
   if (body.name) t.name = body.name;
   if (body.plan) t.plan = body.plan;
   if (body.features) Object.assign(t.features, body.features);

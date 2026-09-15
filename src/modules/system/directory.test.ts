@@ -2,17 +2,96 @@ import { Types } from 'mongoose';
 import request from 'supertest';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { app, login, seeded } from '../../tests/helpers';
+import type { AuthUser } from '../../middleware/auth';
 import { PersonaModel } from '../personas/model';
 import { SessionModel } from '../auth/model';
 import { AuditLogModel } from '../audit/model';
 import { audit } from '../audit/service';
 import { TenantModel } from '../tenants/model';
 import { UserModel } from '../users/model';
-import { DrStatusModel } from './dr.model';
+import { directoryService } from './directory.service';
+import { DrStatusModel, FIXED_DR_TARGETS } from './dr.model';
+
+async function actorFor(email: string): Promise<AuthUser> {
+  const user = (await UserModel.findOne({ email }).lean())!;
+  return {
+    id: String(user._id),
+    firebaseUid: user.firebaseUid,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+    tenantId: String(user.tenantId),
+    departmentIds: user.departmentIds.map(String),
+    crossDepartmentAccess: user.crossDepartmentAccess,
+    mfaEnrolled: user.mfaEnrolled,
+  };
+}
 
 describe('system directory administration [FR-02, FR-10, SEC-01]', () => {
   beforeEach(async () => {
     await seeded();
+  });
+
+  it('keeps FREE tenants requestor-only and keeps seeded managed identities on PAID [FR-02, SEC-01]', async () => {
+    const publicTenant = await TenantModel.findOne({ slug: 'public' });
+    const tac = await TenantModel.findOne({ slug: 'tac' });
+    expect(publicTenant?.plan).toBe('free');
+    expect(tac?.plan).toBe('paid');
+
+    const managedEmails = ['admin@dev.local', 'admin2@dev.local', 'sysadmin@dev.local', 'audit@dev.local'];
+    const managed = await UserModel.find({ email: { $in: managedEmails } }).sort({ email: 1 }).lean();
+    expect(managed).toHaveLength(managedEmails.length);
+    expect(managed.every((user) => String(user.tenantId) === String(tac?._id))).toBe(true);
+    expect(await UserModel.countDocuments({ tenantId: publicTenant?._id, role: { $ne: 'requestor' } })).toBe(0);
+
+    const paidSysadmin = await login('sysadmin@dev.local');
+    const downgrade = await request(app).patch('/api/v1/system/tenant').set(paidSysadmin).send({ plan: 'free' });
+    expect(downgrade.status).toBe(409);
+    expect(downgrade.body.error.code).toBe('CONFLICT');
+
+    // Supported operator tooling calls the same service boundary; no managed FREE identity needs
+    // to authenticate in order to enforce or remediate legacy records.
+    const actor = await actorFor('sysadmin@dev.local');
+    const requestor = await directoryService.createUser(String(publicTenant!._id), {
+      email: 'free.requestor@example.com',
+      name: 'FREE Requestor',
+      role: 'requestor',
+      departmentIds: [],
+      crossDepartmentAccess: false,
+    }, actor);
+    expect(requestor).toMatchObject({ email: 'free.requestor@example.com', role: 'requestor' });
+
+    await expect(directoryService.createUser(String(publicTenant!._id), {
+      email: 'free.admin@example.com',
+      name: 'FREE Administrator',
+      role: 'administrator',
+      departmentIds: [],
+      crossDepartmentAccess: false,
+    }, actor)).rejects.toMatchObject({ code: 'FEATURE_DISABLED' });
+
+    await expect(directoryService.updateUser(String(publicTenant!._id), requestor._id, { role: 'audit' }, actor)).rejects.toMatchObject({ code: 'FEATURE_DISABLED' });
+
+    const rename = await directoryService.updateUser(String(publicTenant!._id), requestor._id, { name: 'Renamed FREE Requestor' }, actor);
+    expect(rename).toMatchObject({ name: 'Renamed FREE Requestor', role: 'requestor' });
+  });
+
+  it('rejects legacy managed FREE identities before a session can be created [FR-02, SEC-01]', async () => {
+    const publicTenant = await TenantModel.findOne({ slug: 'public' });
+    for (const role of ['administrator', 'system_administrator', 'audit'] as const) {
+      const email = `legacy.free.${role}@example.com`;
+      await UserModel.create({
+        firebaseUid: `dev:${email}`,
+        email,
+        name: `Legacy ${role}`,
+        role,
+        tenantId: publicTenant!._id,
+        mfaEnrolled: true,
+        status: 'active',
+      });
+      const denied = await request(app).post('/api/v1/auth/session').set('X-Dev-User', email);
+      expect(denied.status).toBe(403);
+      expect(denied.body.error.code).toBe('FEATURE_DISABLED');
+    }
   });
 
   it('provisions and updates one-role users, terminating sessions when the role changes', async () => {
@@ -114,17 +193,16 @@ describe('system directory administration [FR-02, FR-10, SEC-01]', () => {
   });
 
   it('reports DR as unverified until external backup and restore-drill evidence is recorded [NFR-06]', async () => {
+    expect(FIXED_DR_TARGETS).toMatchObject({ backupFrequencyHours: 24, rpoHours: 1, rtoHours: 4, drillFrequencyDays: 365 });
+    expect((await request(app).get('/api/v1/system/dr/status').set(await login('requestor@dev.local'))).status).toBe(403);
     const sysadmin = await login('sysadmin@dev.local');
     const empty = await request(app).get('/api/v1/system/dr/status').set(sysadmin);
     expect(empty.body.data).toMatchObject({
       readiness: 'attention_required',
-      targetsConfigurable: false,
+      targetsConfigurable: true,
       targets: { backupFrequencyHours: 24, rpoHours: 1, rtoHours: 4, drillFrequencyDays: 365 },
       checks: { backupFresh: false, drillCurrent: false, externalEvidenceRecorded: false },
     });
-    const fixedTargets = await request(app).patch('/api/v1/system/dr/status').set(sysadmin).send({ targets: { rpoHours: 0.5, rtoHours: 2 } });
-    expect(fixedTargets.status).toBe(403);
-    expect(fixedTargets.body.error.code).toBe('FEATURE_DISABLED');
     const now = new Date();
     const recorded = await request(app).patch('/api/v1/system/dr/status').set(sysadmin).send({
       provider: 'MongoDB Atlas',

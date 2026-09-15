@@ -8,8 +8,8 @@ vi.mock('../../lib/firebase', () => ({
       const { AppError } = await import('../../lib/errors');
       throw new AppError('UNAUTHENTICATED', 'Invalid or expired ID token');
     }
-    const [, uid, email, mfa] = token.split(':');
-    return { uid, email, name: 'Firebase User', mfa: mfa === 'mfa' };
+    const [, uid, email, mfa, provider] = token.split(':');
+    return { uid, email, name: 'Firebase User', mfa: mfa === 'mfa', signInProvider: provider };
   },
 }));
 
@@ -25,6 +25,7 @@ describe('Firebase bearer login', () => {
     await seeded();
     // OTP is covered in otp.test.ts; here we test identity → user mapping only.
     await TenantModel.updateOne({ slug: 'public' }, { $set: { 'authPolicy.otpRequired': false } });
+    await TenantModel.updateOne({ slug: 'tac' }, { $set: { 'features.sso': true, sso: { providerId: 'oidc.tac', domain: 'tac.example' } } });
   });
 
   it('rejects an invalid token [FR-01]', async () => {
@@ -73,17 +74,17 @@ describe('Firebase bearer login', () => {
   });
 
   it('links a pre-provisioned account only after the required OTP succeeds [FR-01, FR-02, SEC-03]', async () => {
-    const res = await request(app).post('/api/v1/auth/session').set('Authorization', 'Bearer uid:real-admin-uid:admin@dev.local:mfa');
+    const res = await request(app).post('/api/v1/auth/session').set('Authorization', 'Bearer uid:real-admin-uid:admin@dev.local:mfa:oidc.tac');
     expect(res.status).toBe(401); // administrators always need the OTP step (SEC-03)
     expect(res.body.error.code).toBe('OTP_REQUIRED');
     let users = await UserModel.find({ email: 'admin@dev.local' });
     expect(users).toHaveLength(1);
     expect(users[0]!.firebaseUid).toBe('dev:admin@dev.local');
 
-    const requested = await request(app).post('/api/v1/auth/otp/request').set('Authorization', 'Bearer uid:real-admin-uid:admin@dev.local:mfa');
+    const requested = await request(app).post('/api/v1/auth/otp/request').set('Authorization', 'Bearer uid:real-admin-uid:admin@dev.local:mfa:oidc.tac');
     const login = await request(app)
       .post('/api/v1/auth/session')
-      .set('Authorization', 'Bearer uid:real-admin-uid:admin@dev.local:mfa')
+      .set('Authorization', 'Bearer uid:real-admin-uid:admin@dev.local:mfa:oidc.tac')
       .send({ otpCode: requested.body.data.devCode });
     expect(login.status).toBe(201);
     users = await UserModel.find({ email: 'admin@dev.local' });

@@ -18,6 +18,19 @@ The API is served at `http://localhost:4000/api/v1`. The development seed create
 identities that can be selected through `AUTH_DEV_BYPASS=true`. That bypass and the console mailer
 are rejected when `NODE_ENV=production`.
 
+The seeded `requestor@dev.local` identity belongs to the shared FREE tenant. The optional
+`requestor@tac.local` identity and the managed
+`admin@dev.local`, `admin2@dev.local`, `sysadmin@dev.local`, and `audit@dev.local` identities belong
+to the PAID TAC demo tenant. FREE provisioning accepts requestor accounts only; administrator,
+system-administrator, and audit roles require a PAID tenant. Authentication also rejects a legacy
+managed-role row that still points at a FREE tenant, before any application session is created.
+Re-run `npm run seed` to reconcile the known development identities. For another legacy account,
+use the trusted `npm run user:create -- --email ... --name ... --role requestor --tenant public`
+operator path to demote it, or move it to a PAID tenant with its approved managed role.
+`npm run seed:content` publishes the reviewed starter library to both the shared FREE namespace and
+the TAC demo tenant, so the FREE requestor and PAID administrator demos remain usable without a
+managed account in the FREE tenant.
+
 Production signup/sign-in also requires a real Firebase project. The application accepts an app
 session only after Firebase reports a verified email; authorized domains, verification-email
 template/delivery, and the later application OTP flow must be configured and tested externally.
@@ -51,6 +64,7 @@ RUN_AI_LIVE=1 AI_PROVIDER=openai OPENAI_API_KEY=... npm run test:ai-live
 | `npm run audit:verify` | Verify a tenant audit hash chain |
 | `npm run load:smoke` | Run the local synthetic load harness |
 | `npm run accuracy` | Calculate the decision accept-rate diagnostic |
+| `npm run user:create -- --email ... --name ... --role ... --tenant ...` | Provision or reconcile one tenant account; managed roles require PAID |
 
 See `../docs/ai/DeploymentGuide.md` before using any script against a non-development database.
 

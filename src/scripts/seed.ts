@@ -1,6 +1,6 @@
 /**
  * Idempotent development seed (DevelopmentGuide.md "Seeded test accounts").
- * Creates the shared FREE tenant, one PAID tenant with all features, departments and five users.
+ * Creates the shared requestor-only FREE tenant, a TAC PAID operator tenant, and one PAID customer demo.
  * firebaseUid is a placeholder (`dev:<email>`) until real Firebase accounts exist; with
  * AUTH_DEV_BYPASS=true the API accepts `X-Dev-User: <email>` for these users.
  */
@@ -37,6 +37,14 @@ async function upsertUser(input: { email: string; name: string; role: Role; tena
 
 export async function seed() {
   const publicTenant = await upsertTenant({ name: 'Public (FREE)', slug: PUBLIC_TENANT_SLUG, plan: 'free', sectors: ['financial', 'healthcare', 'it'] });
+  const tac = await upsertTenant({
+    name: 'TAC Solutions (PAID operator demo)',
+    slug: 'tac',
+    plan: 'paid',
+    sectors: ['financial', 'healthcare', 'it'],
+    features: { reviewDashboard: true, reports: true, fullAudit: true, blockConcurrentLogin: false },
+    retentionPolicy: { assessmentDays: 365 * 7, auditDays: 365 * 7, evidenceDays: 365 * 7, datasetHistoryDays: 365 * 10 },
+  });
   const acme = await upsertTenant({
     name: 'Acme Financial (PAID demo)',
     slug: 'acme',
@@ -55,10 +63,11 @@ export async function seed() {
 
   const users = [
     { email: 'requestor@dev.local', name: 'Dev Requestor', role: 'requestor' as Role, tenantId: publicTenant._id },
-    { email: 'admin@dev.local', name: 'Dev Administrator (TAC)', role: 'administrator' as Role, tenantId: publicTenant._id, mfaEnrolled: true },
-    { email: 'admin2@dev.local', name: 'Dev Administrator 2 (TAC reviewer)', role: 'administrator' as Role, tenantId: publicTenant._id, mfaEnrolled: true },
-    { email: 'sysadmin@dev.local', name: 'Dev System Administrator (Bayshore)', role: 'system_administrator' as Role, tenantId: publicTenant._id, mfaEnrolled: true },
-    { email: 'audit@dev.local', name: 'Dev Auditor', role: 'audit' as Role, tenantId: publicTenant._id },
+    { email: 'requestor@tac.local', name: 'TAC Demo Requestor', role: 'requestor' as Role, tenantId: tac._id },
+    { email: 'admin@dev.local', name: 'Dev Administrator (TAC)', role: 'administrator' as Role, tenantId: tac._id, mfaEnrolled: true },
+    { email: 'admin2@dev.local', name: 'Dev Administrator 2 (TAC reviewer)', role: 'administrator' as Role, tenantId: tac._id, mfaEnrolled: true },
+    { email: 'sysadmin@dev.local', name: 'Dev System Administrator (Bayshore)', role: 'system_administrator' as Role, tenantId: tac._id, mfaEnrolled: true },
+    { email: 'audit@dev.local', name: 'Dev Auditor', role: 'audit' as Role, tenantId: tac._id, mfaEnrolled: true },
     { email: 'requestor@paid.local', name: 'Acme Finance Requestor', role: 'requestor' as Role, tenantId: acme._id, departmentIds: [finance._id] },
     { email: 'itlead@paid.local', name: 'Acme IT Lead', role: 'requestor' as Role, tenantId: acme._id, departmentIds: [it._id] },
     { email: 'colleague@paid.local', name: 'Acme Finance Colleague', role: 'requestor' as Role, tenantId: acme._id, departmentIds: [finance._id] }, // escalation target (T-061)
@@ -66,7 +75,7 @@ export async function seed() {
   ];
   for (const u of users) await upsertUser(u);
 
-  return { tenants: 2, departments: 2, users: users.length };
+  return { tenants: 3, departments: 2, users: users.length };
 }
 
 if (require.main === module) {

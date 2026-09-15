@@ -24,7 +24,7 @@ describe('personas (FR-09, versioning)', () => {
   beforeEach(async () => {
     await seeded();
     admin = await login('admin@dev.local');
-    requestor = await login('requestor@dev.local');
+    requestor = await login('requestor@tac.local');
   });
 
   it('administrator creates a draft; requestor cannot create [SEC-01]', async () => {

@@ -13,8 +13,8 @@ describe('audit hash chain', () => {
   let tenantId: string;
 
   beforeEach(async () => {
-    const { publicTenant } = await seeded();
-    tenantId = String(publicTenant._id);
+    const { tac } = await seeded();
+    tenantId = String(tac._id);
   });
 
   it('links entries with prevHash starting from genesis and verifies ok [SEC-07]', async () => {

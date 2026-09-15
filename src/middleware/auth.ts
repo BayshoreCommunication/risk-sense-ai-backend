@@ -4,6 +4,7 @@ import { env, isProd } from '../config/env';
 import { AppError } from '../lib/errors';
 import { verifyIdToken } from '../lib/firebase';
 import { UserModel, type Role } from '../modules/users/model';
+import { assertRoleAllowedForPlan } from '../modules/users/plan-policy';
 import { usersService } from '../modules/users/service';
 import { TenantModel, type TenantFeatures, type TenantPlan } from '../modules/tenants/model';
 
@@ -76,6 +77,9 @@ export const authenticate: RequestHandler = async (req, _res, next) => {
 
   const tenant = await TenantModel.findById(user.tenantId).lean();
   if (!tenant) throw new AppError('UNAUTHENTICATED', 'Tenant missing');
+  // FR-02: fail closed for pre-policy/invalid data as well as new provisioning. Re-running the
+  // seed moves known development operators; other legacy rows must be demoted or moved by an operator.
+  assertRoleAllowedForPlan(tenant.plan, user.role);
 
   // FR-03: paid requestors/administrators must authenticate through the tenant's configured IdP.
   // The local dev bypass remains available only outside production for seeded development accounts.

@@ -35,11 +35,11 @@ describe('assessment execution pins [AI-04, FR-11, FR-17, FR-19]', () => {
   let admin2: Record<string, string>;
 
   beforeEach(async () => {
-    const { publicTenant } = await seeded();
-    owner = await login('requestor@dev.local');
+    const { tac } = await seeded();
+    owner = await login('requestor@tac.local');
     admin = await login('admin@dev.local');
     admin2 = await login('admin2@dev.local');
-    const tenantId = publicTenant._id;
+    const tenantId = tac._id;
 
     await PersonaModel.create({
       tenantId,

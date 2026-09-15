@@ -20,18 +20,18 @@ import { UserModel } from '../modules/users/model';
  */
 describe('multi-tenant isolation [NFR-04, SEC-01]', () => {
   let acmeId: Types.ObjectId;
-  let publicId: Types.ObjectId;
+  let comparisonTenantId: Types.ObjectId;
   let acmeAdmin: Record<string, string>;
   let acmeReq: Record<string, string>;
-  let publicAdmin: Record<string, string>;
-  let publicAuditor: Record<string, string>;
+  let comparisonAdmin: Record<string, string>;
+  let comparisonAuditor: Record<string, string>;
   let ids: Record<string, string>;
 
   beforeEach(async () => {
-    const { acme, publicTenant } = await seeded();
+    const { acme, tac } = await seeded();
     acmeId = acme._id;
-    publicId = publicTenant._id;
-    // acme gets its own content + an assessment + audit entries; the public tenant has none of it
+    comparisonTenantId = tac._id;
+    // Acme gets its own content + an assessment + audit entries; the separate PAID TAC tenant has none of it.
     const admin = (await UserModel.findOne({ email: 'admin@paid.local' }))!;
     const req = (await UserModel.findOne({ email: 'requestor@paid.local' }))!;
     const persona = await PersonaModel.create({ tenantId: acmeId, key: 'acme_only_persona', name: 'Acme Only', description: 'x', sector: 'financial', status: 'draft', version: 1, versionGroupId: new Types.ObjectId(), isCurrent: true, createdBy: admin._id });
@@ -45,19 +45,19 @@ describe('multi-tenant isolation [NFR-04, SEC-01]', () => {
     ids = { persona: String(persona._id), scenario: String(scenario._id), question: String(question._id), rule: String(rule._id), matrix: String(matrix._id), assessment: String(assessment._id), department: String(department._id) };
     acmeAdmin = await login('admin@paid.local');
     acmeReq = await login('requestor@paid.local');
-    publicAdmin = await login('admin@dev.local');
-    publicAuditor = await login('audit@dev.local');
+    comparisonAdmin = await login('admin@dev.local');
+    comparisonAuditor = await login('audit@dev.local');
   });
 
   const LISTS: { path: string; marker: string; as: () => Record<string, string> }[] = [
-    { path: '/personas?status=draft', marker: 'acme_only_persona', as: () => publicAdmin },
-    { path: '/scenarios?status=draft', marker: 'acme_only_scenario', as: () => publicAdmin },
-    { path: '/questions', marker: 'acme_only_question', as: () => publicAdmin },
-    { path: '/rules', marker: 'acme_only_rule', as: () => publicAdmin },
-    { path: '/scoring-matrices', marker: 'acme_only_matrix', as: () => publicAdmin },
-    { path: '/assessments', marker: '__assessment_id__', as: () => publicAuditor },
-    { path: '/departments', marker: 'Finance', as: () => publicAuditor },
-    { path: '/audit-logs', marker: '__tenant_id__', as: () => publicAuditor },
+    { path: '/personas?status=draft', marker: 'acme_only_persona', as: () => comparisonAdmin },
+    { path: '/scenarios?status=draft', marker: 'acme_only_scenario', as: () => comparisonAdmin },
+    { path: '/questions', marker: 'acme_only_question', as: () => comparisonAdmin },
+    { path: '/rules', marker: 'acme_only_rule', as: () => comparisonAdmin },
+    { path: '/scoring-matrices', marker: 'acme_only_matrix', as: () => comparisonAdmin },
+    { path: '/assessments', marker: '__assessment_id__', as: () => comparisonAuditor },
+    { path: '/departments', marker: 'Finance', as: () => comparisonAuditor },
+    { path: '/audit-logs', marker: '__tenant_id__', as: () => comparisonAuditor },
   ];
 
   it('list routes never return another tenant’s documents', async () => {
@@ -68,37 +68,37 @@ describe('multi-tenant isolation [NFR-04, SEC-01]', () => {
       expect(JSON.stringify(mine.body), `${l.path} as acme should contain ${marker}`).toContain(marker);
       const other = await request(app).get(`/api/v1${l.path}`).set(l.as());
       expect(other.status, l.path).toBe(200);
-      expect(JSON.stringify(other.body), `${l.path} as public must not contain ${marker}`).not.toContain(marker);
+      expect(JSON.stringify(other.body), `${l.path} as TAC must not contain ${marker}`).not.toContain(marker);
     }
   });
 
   it('detail routes answer 404 (not 403) across tenants so ids cannot be probed', async () => {
     const detail: [string, Record<string, string>][] = [
-      [`/personas/${ids.persona}`, publicAdmin],
-      [`/scenarios/${ids.scenario}`, publicAdmin],
-      [`/questions/${ids.question}`, publicAdmin],
-      [`/rules/${ids.rule}`, publicAdmin],
-      [`/scoring-matrices/${ids.matrix}`, publicAdmin],
-      [`/assessments/${ids.assessment}`, publicAuditor],
-      [`/assessments/${ids.assessment}/messages`, publicAuditor],
-      [`/assessments/${ids.assessment}/reconstruct`, publicAuditor],
+      [`/personas/${ids.persona}`, comparisonAdmin],
+      [`/scenarios/${ids.scenario}`, comparisonAdmin],
+      [`/questions/${ids.question}`, comparisonAdmin],
+      [`/rules/${ids.rule}`, comparisonAdmin],
+      [`/scoring-matrices/${ids.matrix}`, comparisonAdmin],
+      [`/assessments/${ids.assessment}`, comparisonAuditor],
+      [`/assessments/${ids.assessment}/messages`, comparisonAuditor],
+      [`/assessments/${ids.assessment}/reconstruct`, comparisonAuditor],
     ];
     for (const [path, h] of detail) {
       const res = await request(app).get(`/api/v1${path}`).set(h);
       expect(res.status, path).toBe(404);
     }
     // writes across tenants are refused too
-    expect((await request(app).patch(`/api/v1/personas/${ids.persona}`).set(publicAdmin).send({ name: 'hijack' })).status).toBe(404);
+    expect((await request(app).patch(`/api/v1/personas/${ids.persona}`).set(comparisonAdmin).send({ name: 'hijack' })).status).toBe(404);
     expect((await request(app).post(`/api/v1/assessments/${ids.assessment}/decision`).set(await login('requestor@dev.local')).send({ type: 'accept' })).status).toBe(404);
   });
 
   it('reports and analytics are computed per tenant; the audit log of one tenant never leaks into another', async () => {
-    await TenantModel.updateOne({ _id: publicId }, { $set: { 'features.reports': true } });
-    const pub = (await request(app).get('/api/v1/reports/volume').set(publicAdmin)).body.data;
-    expect(pub.summary.started).toBe(0);
+    await TenantModel.updateOne({ _id: comparisonTenantId }, { $set: { 'features.reports': true } });
+    const comparison = (await request(app).get('/api/v1/reports/volume').set(comparisonAdmin)).body.data;
+    expect(comparison.summary.started).toBe(0);
     const acme = (await request(app).get('/api/v1/reports/volume').set(acmeAdmin)).body.data;
     expect(acme.summary.started).toBe(1);
-    expect(await AuditLogModel.countDocuments({ tenantId: publicId, 'entity.id': ids.assessment })).toBe(0);
+    expect(await AuditLogModel.countDocuments({ tenantId: comparisonTenantId, 'entity.id': ids.assessment })).toBe(0);
     const requestorOther = await request(app).get(`/api/v1/assessments/${ids.assessment}/escalation-targets`).set(acmeReq);
     expect(requestorOther.status).toBe(200);
   });

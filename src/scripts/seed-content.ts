@@ -33,21 +33,28 @@ async function main() {
   const file = process.argv[2] ?? join(process.cwd(), 'templates', 'starter-content.json');
   const content = JSON.parse(readFileSync(file, 'utf8'));
   await connectDb();
-  const tenant = await TenantModel.findOne({ slug: PUBLIC_TENANT_SLUG }).lean();
-  if (!tenant) throw new Error('public tenant missing — run npm run seed first');
-  const tenantId = String(tenant._id);
+  const [publicTenant, tacTenant] = await Promise.all([
+    TenantModel.findOne({ slug: PUBLIC_TENANT_SLUG }).lean(),
+    TenantModel.findOne({ slug: 'tac' }).lean(),
+  ]);
+  if (!publicTenant || !tacTenant) throw new Error('public/TAC tenant missing — run npm run seed first');
   const author = await actor('admin@dev.local');
   const reviewer = await actor('admin2@dev.local');
 
-  const uploaded = await datasetsService.upload(tenantId, { fileName: file.split('/').pop() ?? 'content.json', json: content }, author);
-  if (uploaded.status !== 'validated') {
-    logger.error({ errors: uploaded.validationErrors }, `dataset rejected with ${uploaded.validationErrors.length} errors`);
-    process.exitCode = 2;
-    return;
+  // The PAID TAC operators curate both the shared FREE library and their own demo tenant. This
+  // keeps FREE accounts requestor-only while preserving useful requestor and administrator demos.
+  for (const tenant of [publicTenant, tacTenant]) {
+    const tenantId = String(tenant._id);
+    const uploaded = await datasetsService.upload(tenantId, { fileName: file.split('/').pop() ?? 'content.json', json: content }, author);
+    if (uploaded.status !== 'validated') {
+      logger.error({ tenant: tenant.slug, errors: uploaded.validationErrors }, `dataset rejected with ${uploaded.validationErrors.length} errors`);
+      process.exitCode = 2;
+      return;
+    }
+    await datasetsService.approve(tenantId, String(uploaded._id), reviewer);
+    const active = await datasetsService.activate(tenantId, String(uploaded._id), author);
+    logger.info({ tenant: tenant.slug, seq: active.seq, counts: active.counts, applied: active.applied }, 'content dataset activated');
   }
-  await datasetsService.approve(tenantId, String(uploaded._id), reviewer);
-  const active = await datasetsService.activate(tenantId, String(uploaded._id), author);
-  logger.info({ seq: active.seq, counts: active.counts, applied: active.applied }, 'content dataset activated');
 }
 
 main()

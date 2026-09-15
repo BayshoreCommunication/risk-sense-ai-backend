@@ -10,6 +10,7 @@ import { connectDb } from '../lib/db';
 import { audit } from '../modules/audit/service';
 import { DepartmentModel, TenantModel } from '../modules/tenants/model';
 import { ROLES, UserModel, type Role } from '../modules/users/model';
+import { assertRoleAllowedForPlan } from '../modules/users/plan-policy';
 
 const argv = process.argv.slice(2);
 const arg = (k: string) => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : undefined; };
@@ -26,6 +27,7 @@ async function main() {
   await connectDb();
   const tenant = await TenantModel.findOne({ slug });
   if (!tenant) throw new Error(`tenant "${slug}" not found (run npm run seed)`);
+  assertRoleAllowedForPlan(tenant.plan, role);
   const dept = department ? await DepartmentModel.findOne({ tenantId: tenant._id, name: department }) : null;
   if (department && !dept) throw new Error(`department "${department}" not found in ${slug}`);
   const existing = await UserModel.findOne({ email });

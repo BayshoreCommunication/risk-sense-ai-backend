@@ -7,6 +7,7 @@ import { sessionService } from '../auth/service';
 import { PersonaModel } from '../personas/model';
 import { DepartmentModel, PUBLIC_TENANT_SLUG, TenantModel } from '../tenants/model';
 import { UserModel } from '../users/model';
+import { assertRoleAllowedForPlan } from '../users/plan-policy';
 import type { SystemDepartmentCreate, SystemDepartmentPatch, SystemUserCreate, SystemUserPatch } from './schema';
 import { contentTenantId } from '../assessments/content';
 
@@ -33,6 +34,12 @@ async function validateDepartments(tenantId: string, departmentIds: string[]) {
   const count = await DepartmentModel.countDocuments({ tenantId, _id: { $in: unique.map((id) => new Types.ObjectId(id)) } });
   if (count !== unique.length) throw new AppError('VALIDATION_ERROR', 'Every department must belong to this tenant');
   return unique;
+}
+
+async function validatePlanRole(tenantId: string, role: SystemUserCreate['role']) {
+  const tenant = await TenantModel.findById(tenantId).select('plan').lean();
+  if (!tenant) throw notFound('tenant');
+  assertRoleAllowedForPlan(tenant.plan, role);
 }
 
 async function validatePersonas(tenantId: string, personaIds: string[]) {
@@ -78,6 +85,7 @@ export const directoryService = {
   },
 
   async createUser(tenantId: string, body: SystemUserCreate, actor: AuthUser) {
+    await validatePlanRole(tenantId, body.role);
     const departmentIds = await validateDepartments(tenantId, body.departmentIds);
     validateRoleScope(body.role, departmentIds, body.crossDepartmentAccess);
     let user;
@@ -109,6 +117,7 @@ export const directoryService = {
       }
       const before = userView(user);
       const role = body.role ?? user.role;
+      await validatePlanRole(tenantId, role);
       const departmentIds = body.departmentIds ? await validateDepartments(tenantId, body.departmentIds) : user.departmentIds.map(String);
       const crossDepartmentAccess = body.crossDepartmentAccess ?? user.crossDepartmentAccess;
       validateRoleScope(role, departmentIds, crossDepartmentAccess);

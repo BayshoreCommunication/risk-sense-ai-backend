@@ -3,21 +3,27 @@ import { join } from 'node:path';
 import mongoose from 'mongoose';
 import request from 'supertest';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { app, login, seeded } from '../../tests/helpers';
+import type { AuthTenant, AuthUser } from '../../middleware/auth';
+import { app, login, publishReviewedContent, seeded } from '../../tests/helpers';
+import { TenantModel } from '../tenants/model';
+import { UserModel } from '../users/model';
 import { AssessmentModel } from './model';
 import { reconstruct } from './reconstruct';
+import { assessmentsService } from './service';
 
 /** T-063 / FR-26: the lifecycle is rebuilt from the audit log alone; FR-30: the rebuilt state is compared with the stored document. */
 describe('reconstruction from the audit log [FR-26, FR-30, SEC-07]', () => {
   const starter = JSON.parse(readFileSync(join(process.cwd(), 'templates', 'starter-content.json'), 'utf8'));
 
   beforeEach(async () => {
-    await seeded();
+    const { publicTenant } = await seeded();
     const admin = await login('admin@dev.local');
     const admin2 = await login('admin2@dev.local');
     const up = await request(app).post('/api/v1/datasets').set(admin).send({ fileName: 'starter.json', content: starter });
     await request(app).post(`/api/v1/datasets/${up.body.data._id}/approve`).set(admin2);
     expect((await request(app).post(`/api/v1/datasets/${up.body.data._id}/activate`).set(admin)).status).toBe(200);
+
+    await publishReviewedContent(String(publicTenant._id), starter);
   });
 
   /** Drives an intake to intake_complete with generic answers (mock AI). */
@@ -38,13 +44,13 @@ describe('reconstruction from the audit log [FR-26, FR-30, SEC-07]', () => {
   }
 
   it('PAID (fullAudit): timeline, facts, score, decisions and status all come back from the log and match the document [FR-26]', async () => {
-    const req = await login('requestor@paid.local');
+    const req = await login('requestor@tac.local');
     const id = await runIntake(req);
     await request(app).post(`/api/v1/assessments/${id}/decision`).set(req).send({ type: 'escalate', reason: 'Needs treasury' });
     await request(app).post(`/api/v1/assessments/${id}/decision`).set(req).send({ type: 'override', overriddenTo: 'issue', reason: 'Treasury confirmed the wire was fraudulent.' });
 
     expect((await request(app).get(`/api/v1/assessments/${id}/reconstruct`).set(req)).status).toBe(403); // requestors do not audit
-    const res = await request(app).get(`/api/v1/assessments/${id}/reconstruct`).set(await login('admin@paid.local')).query({ unmask: 'true' }); // SEC-05: clear values for the comparison (audited)
+    const res = await request(app).get(`/api/v1/assessments/${id}/reconstruct`).set(await login('admin@dev.local')).query({ unmask: 'true' }); // SEC-05: clear values for the comparison (audited)
     expect(res.status).toBe(200);
     const r = res.body.data;
     expect(r.completeness).toBe('full');
@@ -65,9 +71,9 @@ describe('reconstruction from the audit log [FR-26, FR-30, SEC-07]', () => {
   });
 
   it('FR-30: a stored document that drifted from its audit trail is reported, not silently accepted', async () => {
-    const req = await login('requestor@paid.local');
+    const req = await login('requestor@tac.local');
     const id = await runIntake(req);
-    const auditor = await login('admin@paid.local');
+    const auditor = await login('admin@dev.local');
     // Tamper with the stored record directly (no API can do this): change a fact and the score.
     const doc = (await AssessmentModel.findById(id).lean())!;
     const firstFact = doc.facts[0]!.key;
@@ -80,9 +86,9 @@ describe('reconstruction from the audit log [FR-26, FR-30, SEC-07]', () => {
   });
 
   it('SEC-07: a tampered audit entry is flagged by the per-entry hash check', async () => {
-    const req = await login('requestor@paid.local');
+    const req = await login('requestor@tac.local');
     const id = await runIntake(req);
-    const auditor = await login('admin@paid.local');
+    const auditor = await login('admin@dev.local');
     const scored = await mongoose.connection.db!.collection('auditLogs').findOne({ action: 'assessment.scored', 'entity.id': id });
     await mongoose.connection.db!.collection('auditLogs').updateOne({ _id: scored!._id }, { $set: { 'payload.score': 1 } });
     const r = (await request(app).get(`/api/v1/assessments/${id}/reconstruct`).set(auditor).query({ unmask: 'true' })).body.data;
@@ -95,7 +101,36 @@ describe('reconstruction from the audit log [FR-26, FR-30, SEC-07]', () => {
     const req = await login('requestor@dev.local');
     const id = await runIntake(req);
     await request(app).post(`/api/v1/assessments/${id}/decision`).set(req).send({ type: 'accept' });
-    const r = (await request(app).get(`/api/v1/assessments/${id}/reconstruct`).set(await login('audit@dev.local'))).body.data;
+    // FREE has no managed login. Exercise the tenant-scoped reconstruction service as trusted
+    // operator tooling while authentication separately rejects legacy FREE audit identities.
+    const [requestor, tenant] = await Promise.all([
+      UserModel.findOne({ email: 'requestor@dev.local' }).lean(),
+      TenantModel.findOne({ slug: 'public' }).lean(),
+    ]);
+    const operator: AuthUser = {
+      id: String(requestor!._id),
+      firebaseUid: requestor!.firebaseUid,
+      email: requestor!.email,
+      name: requestor!.name,
+      role: 'audit',
+      tenantId: String(tenant!._id),
+      departmentIds: [],
+      crossDepartmentAccess: false,
+      mfaEnrolled: true,
+    };
+    const authTenant: AuthTenant = {
+      id: String(tenant!._id),
+      slug: tenant!.slug,
+      plan: tenant!.plan,
+      features: tenant!.features,
+      sessionPolicy: {
+        idleTimeoutMin: tenant!.sessionPolicy?.idleTimeoutMin ?? 15,
+        maxConcurrentSessions: tenant!.sessionPolicy?.maxConcurrentSessions ?? 1,
+      },
+      authPolicy: { otpRequired: tenant!.authPolicy?.otpRequired ?? true },
+      sso: { providerId: tenant!.sso?.providerId ?? null, domain: tenant!.sso?.domain ?? null },
+    };
+    const r = await assessmentsService.reconstructFromAudit(operator, authTenant, id);
     expect(r.fullAudit).toBe(false);
     expect(r.completeness).toBe('partial');
     expect(r.missing).toEqual(['answers', 'decisionReason', 'explanation', 'factors', 'facts', 'openingText', 'recommendedAction', 'rules']);
@@ -104,7 +139,8 @@ describe('reconstruction from the audit log [FR-26, FR-30, SEC-07]', () => {
     expect(r.state.answers.length).toBeGreaterThan(0);
     expect(r.state.answers[0].answer).toBeUndefined();
     expect(r.conformance.matches).toBe(true); // everything that IS reconstructible still matches
-    // the public-tenant auditor cannot reach an Acme assessment
+    // A managed auditor from another PAID tenant cannot reach the FREE or Acme records.
+    expect((await request(app).get(`/api/v1/assessments/${id}/reconstruct`).set(await login('audit@dev.local'))).status).toBe(404);
     const other = await runIntake(await login('requestor@paid.local'));
     expect((await request(app).get(`/api/v1/assessments/${other}/reconstruct`).set(await login('audit@dev.local'))).status).toBe(404);
   });

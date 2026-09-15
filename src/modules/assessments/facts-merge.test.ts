@@ -19,7 +19,7 @@ describe('fact merge policy (FR-06, FR-30)', () => {
     await seeded();
     const admin = await login('admin@dev.local');
     const admin2 = await login('admin2@dev.local');
-    requestor = await login('requestor@dev.local');
+    requestor = await login('requestor@tac.local');
     const up = await request(app).post('/api/v1/datasets').set(admin).send({ fileName: 'starter.json', content: starter });
     await request(app).post(`/api/v1/datasets/${up.body.data._id}/approve`).set(admin2);
     await request(app).post(`/api/v1/datasets/${up.body.data._id}/activate`).set(admin);

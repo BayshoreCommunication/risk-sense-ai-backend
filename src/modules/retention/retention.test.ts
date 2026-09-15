@@ -15,6 +15,7 @@ const DAY = 86400e3;
 /** SEC-06 / Section 5: flag → grace → reduce (FREE) or archive + reduce (PAID); audit log never deleted; every step audited. */
 describe('retention job [SEC-06, FR-24, SEC-07]', () => {
   let publicId: Types.ObjectId;
+  let tacId: Types.ObjectId;
   let acmeId: Types.ObjectId;
   const NOW = new Date('2026-09-14T02:00:00Z');
 
@@ -33,8 +34,9 @@ describe('retention job [SEC-06, FR-24, SEC-07]', () => {
   }
 
   beforeEach(async () => {
-    const { publicTenant, acme } = await seeded();
+    const { publicTenant, tac, acme } = await seeded();
     publicId = publicTenant._id;
+    tacId = tac._id;
     acmeId = acme._id;
   });
 
@@ -200,20 +202,20 @@ describe('retention job [SEC-06, FR-24, SEC-07]', () => {
   });
 
   it('system administrators run it for their tenant (dry run by default) and list runs; other roles cannot [SEC-06]', async () => {
-    await seedRow(publicId, 'requestor@dev.local', 200);
+    await seedRow(tacId, 'requestor@tac.local', 365 * 8);
     const sysadmin = await login('sysadmin@dev.local');
     const dry = await request(app).post('/api/v1/system/retention/run').set(sysadmin).send({});
     expect(dry.status).toBe(200);
-    expect(dry.body.data).toMatchObject({ slug: 'public', dryRun: true, flagged: 1 });
+    expect(dry.body.data).toMatchObject({ slug: 'tac', dryRun: true, flagged: 1 });
     const real = await request(app).post('/api/v1/system/retention/run').set(sysadmin).send({ dryRun: false });
     expect(real.body.data).toMatchObject({ dryRun: false, flagged: 1 });
     const runs = await request(app).get('/api/v1/system/retention/runs').set(sysadmin);
     expect(runs.body.data).toHaveLength(2);
     expect(runs.body.data[0]).toMatchObject({ trigger: 'manual', dryRun: false });
     expect((await request(app).post('/api/v1/system/retention/run').set(await login('admin@dev.local')).send({})).status).toBe(403);
-    // policy is editable without code (BusinessRules 10.3): shorten to 30 days → the 200-day row is flagged already; a 60-day row becomes eligible
-    await TenantModel.updateOne({ _id: publicId }, { $set: { 'retentionPolicy.assessmentDays': 30 } });
-    await seedRow(publicId, 'requestor@dev.local', 60);
+    // Policy is editable without code (BusinessRules 10.3): shorten to 30 days; a new 60-day row becomes eligible.
+    await TenantModel.updateOne({ _id: tacId }, { $set: { 'retentionPolicy.assessmentDays': 30 } });
+    await seedRow(tacId, 'requestor@tac.local', 60);
     const again = await request(app).post('/api/v1/system/retention/run').set(sysadmin).send({ dryRun: true });
     expect(again.body.data).toMatchObject({ flagged: 1, policy: { assessmentDays: 30 } });
   });

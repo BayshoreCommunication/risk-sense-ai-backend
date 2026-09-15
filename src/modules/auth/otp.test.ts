@@ -12,8 +12,8 @@ vi.mock('../../lib/firebase', () => ({
       const { AppError } = await import('../../lib/errors');
       throw new AppError('UNAUTHENTICATED', 'Invalid or expired ID token');
     }
-    const [, uid, email] = token.split(':');
-    return { uid, email, name: 'Firebase User', mfa: false };
+    const [, uid, email, _mfa, provider] = token.split(':');
+    return { uid, email, name: 'Firebase User', mfa: false, signInProvider: provider };
   },
 }));
 
@@ -26,7 +26,7 @@ import { UserModel } from '../users/model';
 import { SessionModel } from './model';
 import { OtpCodeModel, OtpIssueLockModel } from './otp.model';
 
-const bearer = (uid: string, email: string) => ({ Authorization: `Bearer uid:${uid}:${email}` });
+const bearer = (uid: string, email: string, provider?: string) => ({ Authorization: `Bearer uid:${uid}:${email}:-:${provider ?? ''}` });
 const duplicateKey = (keyPattern: Record<string, number>) => Object.assign(new Error('forced duplicate key'), { code: 11000, keyPattern });
 
 async function requestCode(h: Record<string, string>) {
@@ -40,6 +40,7 @@ describe('email OTP second factor', () => {
     sendMailMock.mockReset();
     sendMailMock.mockResolvedValue({ provider: 'console' });
     await seeded();
+    await TenantModel.updateOne({ slug: 'tac' }, { $set: { 'features.sso': true, sso: { providerId: 'oidc.tac', domain: 'tac.example' } } });
   });
 
   it('Firebase login without a code is refused with OTP_REQUIRED [FR-01]', async () => {
@@ -273,7 +274,7 @@ describe('email OTP second factor', () => {
   });
 
   it('rolls back OTP, identity and session writes when session audit fails, then retries the full exchange [FR-01, FR-02, SEC-02, SEC-03, SEC-07]', async () => {
-    const h = bearer('real-admin-uid', 'admin@dev.local');
+    const h = bearer('real-admin-uid', 'admin@dev.local', 'oidc.tac');
     await UserModel.updateOne(
       { email: 'admin@dev.local' },
       { $set: { mfaEnrolled: false }, $unset: { lastMfaAt: 1, lastLoginAt: 1 } },
@@ -310,7 +311,7 @@ describe('email OTP second factor', () => {
   });
 
   it('restarts the full OTP/link/session transaction after its first session audit-sequence collision [FR-01, FR-02, SEC-02, SEC-03, SEC-07]', async () => {
-    const h = bearer('collision-admin-uid', 'admin@dev.local');
+    const h = bearer('collision-admin-uid', 'admin@dev.local', 'oidc.tac');
     await UserModel.updateOne(
       { email: 'admin@dev.local' },
       { $set: { mfaEnrolled: false }, $unset: { lastMfaAt: 1, lastLoginAt: 1 } },
@@ -346,14 +347,14 @@ describe('email OTP second factor', () => {
   });
 
   it('rolls OTP and identity back when concurrent-session policy rejects the exchange [FR-01, FR-04, SEC-02, SEC-03, SEC-07]', async () => {
-    await TenantModel.updateOne({ slug: 'public' }, { $set: { 'features.blockConcurrentLogin': true } });
+    await TenantModel.updateOne({ slug: 'tac' }, { $set: { 'features.blockConcurrentLogin': true } });
     const active = await request(app).post('/api/v1/auth/session').set('X-Dev-User', 'admin@dev.local');
     expect(active.status).toBe(201);
     await UserModel.updateOne(
       { email: 'admin@dev.local' },
       { $set: { mfaEnrolled: false }, $unset: { lastMfaAt: 1 } },
     );
-    const h = bearer('blocked-admin-uid', 'admin@dev.local');
+    const h = bearer('blocked-admin-uid', 'admin@dev.local', 'oidc.tac');
     const { devCode } = await requestCode(h);
 
     const blocked = await request(app).post('/api/v1/auth/session').set(h).send({ otpCode: devCode });
@@ -380,10 +381,10 @@ describe('email OTP second factor', () => {
   });
 
   it('administrator must pass OTP even when the tenant policy disables it [SEC-03]', async () => {
-    await TenantModel.updateOne({ slug: 'public' }, { $set: { 'authPolicy.otpRequired': false } });
+    await TenantModel.updateMany({ slug: { $in: ['public', 'tac'] } }, { $set: { 'authPolicy.otpRequired': false } });
     const requestor = await request(app).post('/api/v1/auth/session').set(bearer('u9', 'nine@x.com'));
     expect(requestor.status).toBe(201); // policy off → requestor may skip
-    const admin = await request(app).post('/api/v1/auth/session').set(bearer('adm', 'admin@dev.local'));
+    const admin = await request(app).post('/api/v1/auth/session').set(bearer('adm', 'admin@dev.local', 'oidc.tac'));
     expect(admin.status).toBe(401);
     expect(admin.body.error.code).toBe('OTP_REQUIRED');
   });

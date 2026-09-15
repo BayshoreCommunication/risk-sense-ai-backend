@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import mongoose from 'mongoose';
 import request from 'supertest';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { app, login, seeded } from '../../tests/helpers';
+import { app, login, publishReviewedContent, seeded } from '../../tests/helpers';
 import { AuditLogModel } from '../audit/model';
 import { ScenarioModel } from '../scenarios/model';
 import { AssessmentModel } from './model';
@@ -18,14 +18,15 @@ describe('assessments — intake → submit → decision', () => {
   const starter = JSON.parse(readFileSync(join(process.cwd(), 'templates', 'starter-content.json'), 'utf8'));
 
   beforeEach(async () => {
-    await seeded();
+    const { publicTenant } = await seeded();
     admin = await login('admin@dev.local');
     const admin2 = await login('admin2@dev.local');
-    requestor = await login('requestor@dev.local');
+    requestor = await login('requestor@tac.local');
     const up = await request(app).post('/api/v1/datasets').set(admin).send({ fileName: 'starter.json', content: starter });
     await request(app).post(`/api/v1/datasets/${up.body.data._id}/approve`).set(admin2);
     const act = await request(app).post(`/api/v1/datasets/${up.body.data._id}/activate`).set(admin);
     expect(act.status).toBe(200);
+    await publishReviewedContent(String(publicTenant._id), starter);
   });
 
   const post = (path: string, h: Record<string, string>, body?: unknown) => request(app).post(path).set(h).send(body);
@@ -217,7 +218,7 @@ describe('assessments — intake → submit → decision', () => {
     const list = await request(app).get('/api/v1/assessments').set(requestor);
     expect(list.body.data.total).toBe(1);
     const denied = await request(app).get(`/api/v1/assessments/${res.body.data._id}`).set(other);
-    expect(denied.status).toBe(404); // different tenant → not found
+    expect(denied.status).toBe(404); // different PAID tenant → not found
     const auditor = await login('audit@dev.local');
     const ok = await request(app).get(`/api/v1/assessments/${res.body.data._id}`).set(auditor);
     expect(ok.status).toBe(200);

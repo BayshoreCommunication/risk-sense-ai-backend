@@ -12,7 +12,7 @@ describe('stored assessment conformance sweep [FR-30, AI-01, FR-08]', () => {
   });
 
   it('flags invalid raw records, exposes them to sysadmin, and resolves the flag after repair', async () => {
-    const user = (await UserModel.findOne({ email: 'requestor@dev.local' }))!;
+    const user = (await UserModel.findOne({ email: 'requestor@tac.local' }))!;
     const assessmentId = new Types.ObjectId();
     await AssessmentModel.collection.insertOne({
       _id: assessmentId,
