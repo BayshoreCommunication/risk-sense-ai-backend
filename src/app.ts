@@ -21,6 +21,7 @@ import { departmentsRouter } from './modules/tenants/routes';
 import { analyticsRouter, reportsRouter } from './modules/reports/routes';
 import { systemRouter } from './modules/system/routes';
 import { retentionRouter } from './modules/retention/routes';
+import { jobsRouter } from './jobs/routes';
 import { usersRouter } from './modules/users/routes';
 
 export function createApp() {
@@ -88,6 +89,9 @@ export function createApp() {
   api.use('/analytics', analyticsRouter);
   api.use('/system', systemRouter);
   api.use('/system/retention', retentionRouter);
+  // Not under /system: that prefix is a system_administrator RBAC router, and the scheduler has no user
+  // session. jobsRouter carries its own shared-secret gate (DecisionLog 41).
+  api.use('/jobs', jobsRouter);
   app.use('/api/v1', api);
 
   app.use(notFoundHandler);

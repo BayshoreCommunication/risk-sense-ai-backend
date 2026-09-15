@@ -38,6 +38,9 @@ export const envSchema = z
       .optional()
       .transform((v) => v === 'true' || v === '1'),
     JOBS_RETENTION_HOUR: z.coerce.number().int().min(0).max(23).default(2),
+    // Shared secret for the Vercel Cron trigger of jobs/routes.ts. Required in production when the
+    // in-process scheduler is off, which is always the case on a serverless host (DecisionLog 41).
+    CRON_SECRET: z.string().min(16).optional(),
     RATE_LIMIT_DISABLED: z
       .string()
       .optional()
