@@ -93,8 +93,11 @@ describe('assessments list — review dashboard [DASH-01, DASH-04, FR-21]', () =
     const all = await list(h, { limit: 200 });
     expect(all.body.data.total).toBe(120);
     expect(all.body.data.counts).toMatchObject({ in_progress: 20, intake_complete: 20, awaiting_decision: 20, escalated: 20, closed: 20, error_review: 20, pending: 60, all: 120 });
+    expect(all.body.data.summary).toEqual({ averageConfidence: 74.5 });
 
-    expect((await list(h, { status: 'closed' })).body.data.total).toBe(20);
+    const closed = await list(h, { status: 'closed' });
+    expect(closed.body.data.total).toBe(20);
+    expect(closed.body.data.summary).toEqual(all.body.data.summary); // summary deliberately ignores the status dimension
     const pending = await list(h, { pending: 'true', limit: 200 });
     expect(pending.body.data.total).toBe(60);
     expect(new Set(pending.body.data.items.map((r: { status: string }) => r.status))).toEqual(new Set(['awaiting_decision', 'escalated', 'error_review']));
@@ -106,6 +109,7 @@ describe('assessments list — review dashboard [DASH-01, DASH-04, FR-21]', () =
     const persona = await list(h, { personaKey: 'it_support', limit: 200 });
     expect(persona.body.data.total).toBe(40);
     expect(persona.body.data.counts.all).toBe(40); // counts respect the persona filter
+    expect(persona.body.data.summary).toEqual({ averageConfidence: 75 });
     expect((await list(h, { scenarioKey: 'phishing_click', limit: 200 })).body.data.total).toBe(40);
     expect((await list(h, { departmentId: String(finance._id), limit: 200 })).body.data.total).toBe(60);
 
@@ -117,7 +121,21 @@ describe('assessments list — review dashboard [DASH-01, DASH-04, FR-21]', () =
     expect((await list(h, { departmentId: 'not-an-id' })).status).toBe(400);
   });
 
-  it('paginates and keeps pending rows first across pages; newest/oldest ordering [DASH-01]', async () => {
+  it('returns a null average confidence when the scope has only uncomputed results [DASH-01, FR-21]', async () => {
+    await AssessmentModel.create({
+      tenantId: acmeId,
+      requestorId: itLead._id,
+      departmentId: it_._id,
+      status: 'in_progress',
+      personaKey: 'uncomputed_only',
+    });
+
+    const res = await list(itLeadH, { personaKey: 'uncomputed_only' });
+    expect(res.body.data.total).toBe(1);
+    expect(res.body.data.summary).toEqual({ averageConfidence: null });
+  });
+
+  it('paginates and keeps pending rows first across pages; newest/oldest ordering [DASH-01, FR-21]', async () => {
     await seedRows(90);
     await UserModel.updateOne({ _id: itLead._id }, { crossDepartmentAccess: true });
     const h = await login('itlead@paid.local');
@@ -127,6 +145,8 @@ describe('assessments list — review dashboard [DASH-01, DASH-04, FR-21]', () =
     expect(p1.body.data).toMatchObject({ page: 1, limit: 40, total: 90, pages: 3 });
     expect(p1.body.data.items).toHaveLength(40);
     expect(p3.body.data.items).toHaveLength(10);
+    expect(p2.body.data.summary).toEqual(p1.body.data.summary);
+    expect(p3.body.data.summary).toEqual(p1.body.data.summary);
     const seq = [...p1.body.data.items, ...p2.body.data.items, ...p3.body.data.items] as { _id: string; status: string; createdAt: string }[];
     expect(new Set(seq.map((r) => r._id)).size).toBe(90); // no duplicates / gaps between pages
     const pendingIdx = seq.map((r, i) => (['awaiting_decision', 'escalated', 'error_review'].includes(r.status) ? i : -1)).filter((i) => i >= 0);
