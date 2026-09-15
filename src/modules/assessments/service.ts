@@ -4,14 +4,14 @@ import type { AuthTenant, AuthUser } from '../../middleware/auth';
 import { getAi } from '../ai/service';
 import { audit } from '../audit/service';
 import { UserModel } from '../users/model';
-import { classFor as classForSector, isPrivilegedReader, maskAssessmentView, maskMessages, maskText } from '../../lib/sensitive';
-import { rulesService } from '../rules/service';
+import { classFor as classForSector, isPrivilegedReader, maskAssessmentView, maskAuditPayload, maskMessages, maskText } from '../../lib/sensitive';
 import { simulate, type MatrixLike } from '../scoring/compute';
-import { scoringService } from '../scoring/service';
+import { ScoringMatrixModel } from '../scoring/model';
+import { ScenarioModel } from '../scenarios/model';
 import { conditionText, type Facts } from '../shared/conditions';
 import { CLASSIFICATIONS, type Classification } from '../shared/enums';
 import { applyBranch, initialQueue, missingRequired, nextQuestion, structuredValue, type FlowNode, type QuestionLite } from './branching';
-import { activePersonas, activeScenarios, contentTenantId, pinVersions, questionMap, scenarioByKey } from './content';
+import { activePersonas, activePersonasForUser, activeScenarios, contentTenantId, pinVersions, restorePinnedQuestions, restorePinnedRules } from './content';
 import { reconstruct } from './reconstruct';
 import { ASSESSMENT_STATUSES, AssessmentMessageModel, AssessmentModel, type AssessmentStatus } from './model';
 import { PENDING_STATUSES, type DecisionBody, type ListQuery, type MessageBody, type StartBody } from './schema';
@@ -50,15 +50,37 @@ function auditPayload(tenant: AuthTenant, full: Record<string, unknown>, minimal
   return tenant.features.fullAudit ? full : minimal;
 }
 
-async function loadFor(user: AuthUser, id: string): Promise<Doc> {
+async function loadTenantAssessment(user: AuthUser, id: string): Promise<Doc> {
   if (!Types.ObjectId.isValid(id)) throw notFound('assessment');
   const doc = await AssessmentModel.findOne({ _id: id, tenantId: user.tenantId });
   if (!doc) throw notFound('assessment');
-  const own = String(doc.requestorId) === user.id;
-  const sameDept = doc.departmentId && user.departmentIds.includes(String(doc.departmentId));
-  const escalatee = doc.escalatedToUserId && String(doc.escalatedToUserId) === user.id; // T-061
-  if (user.role === 'requestor' && !own && !sameDept && !escalatee && !user.crossDepartmentAccess) throw new AppError('FORBIDDEN', 'not your assessment');
   return doc;
+}
+
+const isOwner = (user: AuthUser, doc: Doc) => String(doc.requestorId) === user.id;
+const isEscalatee = (user: AuthUser, doc: Doc) => Boolean(doc.escalatedToUserId && String(doc.escalatedToUserId) === user.id);
+const sharesDepartment = (user: AuthUser, doc: Doc) => Boolean(doc.departmentId && user.departmentIds.includes(String(doc.departmentId)));
+
+/** Intake state is personal: review scope never grants permission to select, answer or submit for its owner. */
+async function loadOwnedForIntake(user: AuthUser, id: string): Promise<Doc> {
+  const doc = await loadTenantAssessment(user, id);
+  if (user.role !== 'requestor' || !isOwner(user, doc)) throw new AppError('FORBIDDEN', 'only the assessment owner can change its intake');
+  return doc;
+}
+
+/** PAID review visibility is feature-gated; explicit escalation remains visible after scope later changes. */
+async function loadReadableFor(user: AuthUser, tenant: AuthTenant, id: string): Promise<Doc> {
+  const doc = await loadTenantAssessment(user, id);
+  if (user.role !== 'requestor') return doc;
+  const reviewScope = tenant.features.reviewDashboard && (user.crossDepartmentAccess || sharesDepartment(user, doc));
+  if (!isOwner(user, doc) && !isEscalatee(user, doc) && !reviewScope) throw new AppError('FORBIDDEN', 'not authorized to review this assessment');
+  return doc;
+}
+
+/** Human decisions follow review scope but are intentionally separate from intake mutation authorization. */
+async function loadDecidableFor(user: AuthUser, tenant: AuthTenant, id: string): Promise<Doc> {
+  if (user.role !== 'requestor') throw new AppError('FORBIDDEN', 'only an authorized requestor can record a decision');
+  return loadReadableFor(user, tenant, id);
 }
 
 /**
@@ -73,12 +95,24 @@ async function unmaskGate(user: AuthUser, doc: Doc, unmask: boolean, what: strin
 }
 
 async function flowContext(doc: Doc) {
-  const ct = await contentTenantId(String(doc.tenantId));
-  const scenario = await scenarioByKey(ct, doc.scenarioKey!);
-  if (!scenario) throw new AppError('CONFLICT', 'the scenario of this assessment is no longer active');
+  const ct = String(doc.versions?.contentTenantId ?? '');
+  const scenarioPin = doc.versions?.scenario;
+  if (!Types.ObjectId.isValid(ct) || !scenarioPin?.id || !scenarioPin.version) {
+    throw new AppError('CONFLICT', 'assessment has no immutable scenario pin; restart the intake');
+  }
+  const scenario = await ScenarioModel.findOne({ _id: scenarioPin.id, tenantId: ct }).lean();
+  if (!scenario || scenario.version !== scenarioPin.version) throw new AppError('CONFLICT', 'the pinned scenario version is unavailable');
   const flow = scenario.conversationFlow as FlowNode[];
-  const questions = await questionMap(ct, flow.map((n) => n.questionKey));
+  const questions = restorePinnedQuestions(doc.pinnedContent?.questions, doc.versions?.questionSetHash);
   return { ct, scenario, flow, questions };
+}
+
+async function pinnedMatrix(doc: Doc, contentTenant: string): Promise<MatrixLike> {
+  const pin = doc.versions?.matrix;
+  if (!pin?.id || !pin.version) throw new AppError('CONFLICT', 'assessment has no immutable scoring-matrix pin; restart the intake');
+  const matrix = await ScoringMatrixModel.findOne({ _id: pin.id, tenantId: contentTenant }).lean();
+  if (!matrix || matrix.version !== pin.version) throw new AppError('CONFLICT', 'the pinned scoring-matrix version is unavailable');
+  return matrix as unknown as MatrixLike;
 }
 
 /** Advances the queue; persists the next question as an assistant message. Returns what the client renders. */
@@ -132,7 +166,8 @@ export const assessmentsService = {
   /** T-031/T-032: create the session; choose or infer the persona (FR-04). */
   async start(user: AuthUser, tenant: AuthTenant, body: StartBody) {
     const ct = await contentTenantId(user.tenantId);
-    const personas = await activePersonas(ct);
+    const allPersonas = await activePersonas(ct);
+    const personas = body.personaKey ? allPersonas : await activePersonasForUser(user, tenant, ct);
     if (personas.length === 0) throw new AppError('CONFLICT', 'no active personas are configured yet');
     const ai = getAi();
     const doc = new AssessmentModel({
@@ -145,7 +180,7 @@ export const assessmentsService = {
     if (body.text) await say(doc, 'user', 'answer', body.text.trim());
 
     if (body.personaKey) {
-      const p = personas.find((x) => x.key === body.personaKey);
+      const p = allPersonas.find((x) => x.key === body.personaKey);
       if (!p) throw new AppError('VALIDATION_ERROR', `persona "${body.personaKey}" is not active`);
       doc.personaKey = p.key;
       doc.personaSource = 'user';
@@ -155,7 +190,11 @@ export const assessmentsService = {
       if (p && inferred.confidence >= PERSONA_MIN_CONFIDENCE) {
         doc.personaKey = p.key;
         doc.personaSource = 'ai';
-        await say(doc, 'assistant', 'info', `It sounds like you work as a ${p.name}. You can change this if it is wrong.`);
+        doc.personaCandidates = personas.map((x) => x.key) as never;
+        doc.phase = 'persona';
+        await say(doc, 'assistant', 'question', `It sounds like you work as a ${p.name}. Confirm this role or choose another before we continue.`, {
+          question: { key: '__persona', type: 'mcq', options: personas.map((x) => ({ id: x.key, label: x.name })) },
+        });
       } else {
         doc.personaCandidates = personas.map((x) => x.key) as never;
         doc.phase = 'persona';
@@ -171,13 +210,14 @@ export const assessmentsService = {
       entity: { type: 'assessment', id: String(doc._id) },
       payload: auditPayload(tenant, { personaKey: doc.personaKey, personaSource: doc.personaSource, openingText: doc.openingText }, { personaKey: doc.personaKey }),
     });
-    if (doc.personaKey) return this.afterPersona(doc, user, tenant);
+    // An AI proposal is never treated as consent: pause so the requestor can confirm or override it (FR-04).
+    if (doc.personaKey && doc.personaSource === 'user') return this.afterPersona(doc, user, tenant);
     return this.view(doc);
   },
 
   /** FR-04: manual choice or override of the AI proposal (only before the questions phase). */
   async setPersona(user: AuthUser, tenant: AuthTenant, id: string, personaKey: string) {
-    const doc = await loadFor(user, id);
+    const doc = await loadOwnedForIntake(user, id);
     if (doc.phase === 'questions' || doc.phase === 'done') throw new AppError('CONFLICT', 'the persona cannot change once questions have started');
     const ct = await contentTenantId(user.tenantId);
     const p = (await activePersonas(ct)).find((x) => x.key === personaKey);
@@ -221,8 +261,9 @@ export const assessmentsService = {
     doc.scenarioSource = source;
     doc.sector = persona.sector;
     // Never spread a Mongoose subdocument back into itself (circular getters); set a plain object.
-    const pins = await pinVersions(user.tenantId, ct, persona as never, scenario as never, persona.sector);
-    doc.set('versions', { promptVersion: doc.versions?.promptVersion, aiProvider: doc.versions?.aiProvider, ...pins });
+    const pinned = await pinVersions(ct, persona as never, scenario as never, persona.sector);
+    doc.set('versions', { promptVersion: doc.versions?.promptVersion, aiProvider: doc.versions?.aiProvider, ...pinned.versions });
+    doc.set('pinnedContent', pinned.pinnedContent);
     doc.queue = initialQueue(scenario.conversationFlow as FlowNode[]) as never;
     await say(doc, 'assistant', 'info', `Scenario: ${scenario.name}`);
     const ctx = await flowContext(doc);
@@ -241,7 +282,7 @@ export const assessmentsService = {
 
   /** T-035/T-036: one turn of the intake. */
   async answer(user: AuthUser, tenant: AuthTenant, id: string, body: MessageBody) {
-    const doc = await loadFor(user, id);
+    const doc = await loadOwnedForIntake(user, id);
     if (doc.status !== 'in_progress') throw new AppError('CONFLICT', `assessment is ${doc.status}`);
 
     if (doc.phase === 'persona') {
@@ -267,12 +308,11 @@ export const assessmentsService = {
     let branchValue: unknown;
     if (q.type === 'free_text' || (body.value === undefined && body.text)) {
       // Free text (or a typed answer to a structured question): the model maps it to facts (FR-06). Never scores.
-      const persona = (await activePersonas(ctx.ct)).find((p) => p.key === doc.personaKey);
       const extracted = await getAi().extractFacts({
         question: { key: q.key, text: q.text, factKey: q.factKey, type: q.type },
         answer: String(raw),
         factCatalog: [...ctx.questions.values()].map((x) => ({ key: x.factKey, hint: x.text })),
-        vocabulary: persona?.vocabulary ?? [],
+        vocabulary: [...(doc.pinnedContent?.personaVocabulary ?? [])],
       });
       doc.answers.push({ questionKey: q.key, text: String(raw), answeredAt: new Date() } as never);
       await say(doc, 'user', 'answer', String(raw), { questionKey: q.key });
@@ -328,18 +368,17 @@ export const assessmentsService = {
 
   /** T-054: rules → scoring → explanation. Only after intake is complete (FR-08). */
   async submit(user: AuthUser, tenant: AuthTenant, id: string) {
-    const doc = await loadFor(user, id);
+    const doc = await loadOwnedForIntake(user, id);
     if (doc.status !== 'intake_complete') throw new AppError('MISSING_REQUIRED_FACTS', `assessment is ${doc.status}; finish the intake first`);
     const ctx = await flowContext(doc);
     const facts = factsOf(doc);
     const missing = missingRequired(ctx.scenario.requiredFactKeys, facts);
     if (missing.length) throw new AppError('MISSING_REQUIRED_FACTS', `missing required facts: ${missing.join(', ')}`, { missing });
 
-    const matrix = await scoringService.currentMatrix(ctx.ct, doc.sector ?? undefined);
-    if (!matrix) throw new AppError('CONFLICT', 'no active scoring matrix');
-    const rules = await rulesService.activeRules(ctx.ct, doc.sector ?? undefined);
+    const matrix = await pinnedMatrix(doc, ctx.ct);
+    const rules = restorePinnedRules(doc.pinnedContent?.rules, doc.versions?.rulesHash);
     const factConfidences = Object.fromEntries(doc.facts.map((f) => [f.key, f.confidence]));
-    const r = simulate({ matrix: matrix as unknown as MatrixLike, rules, facts, requiredFactKeys: ctx.scenario.requiredFactKeys, factConfidences });
+    const r = simulate({ matrix, rules, facts, requiredFactKeys: ctx.scenario.requiredFactKeys, factConfidences });
     await audit.write({ tenantId: user.tenantId, category: 'assessment', action: 'assessment.rules_evaluated', actor: user, entity: { type: 'assessment', id }, payload: auditPayload(tenant, { fired: r.rule?.fired ?? [], winner: r.rule?.ruleKey ?? null }, { fired: r.rule?.fired.length ?? 0 }) });
     await audit.write({ tenantId: user.tenantId, category: 'assessment', action: 'assessment.scored', actor: user, entity: { type: 'assessment', id }, payload: auditPayload(tenant, { score: r.score, computedClassification: r.computedClassification, factors: r.factors, matrix: doc.versions?.matrix }, { score: r.score, classification: r.classification }) });
 
@@ -354,7 +393,7 @@ export const assessmentsService = {
         value: f.value,
         weight: f.weight,
         points: Math.round(f.contribution * 10) / 10,
-        matched: f.matchedMapping === null ? null : conditionText((matrix as unknown as MatrixLike).factors[k as keyof MatrixLike['factors']].mapping[f.matchedMapping]?.when),
+        matched: f.matchedMapping === null ? null : conditionText(matrix.factors[k as keyof MatrixLike['factors']].mapping[f.matchedMapping]?.when),
       })),
       facts: doc.facts.map((f) => ({ key: f.key, value: f.value })),
       reasoningExample: ctx.scenario.reasoningExample ?? null,
@@ -389,7 +428,7 @@ export const assessmentsService = {
 
   /** T-060: the human decision. The only path that can close an assessment (AI-01, FR-22, FR-23). */
   async decide(user: AuthUser, tenant: AuthTenant, id: string, body: DecisionBody) {
-    const doc = await loadFor(user, id);
+    const doc = await loadDecidableFor(user, tenant, id);
     if (!['awaiting_decision', 'escalated', 'error_review'].includes(doc.status)) throw new AppError('CONFLICT', `assessment is ${doc.status}`);
     if (doc.status === 'error_review' && body.type === 'accept') throw new AppError('DECISION_REQUIRED', 'a score of 0 cannot be accepted; override with a classification or escalate (FR-18)');
     doc.decision = { type: body.type, byUserId: new Types.ObjectId(user.id), reason: body.reason?.trim(), overriddenTo: body.overriddenTo, decidedAt: new Date() } as never;
@@ -426,7 +465,7 @@ export const assessmentsService = {
    * rebuilt state with the stored document (FR-30 conformance). Readers: administrator, system_administrator, audit.
    */
   async reconstructFromAudit(user: AuthUser, tenant: AuthTenant, id: string, unmask = false) {
-    const doc = await loadFor(user, id);
+    const doc = await loadReadableFor(user, tenant, id);
     const clear = await unmaskGate(user, doc, unmask, 'reconstruction');
     // Lifecycle categories only: access events (e.g. this very unmask) are not part of what happened to the assessment.
     const entries = await audit.forEntity(user.tenantId, 'assessment', id, ['assessment', 'decision', 'retention']);
@@ -449,16 +488,15 @@ export const assessmentsService = {
       for (const [k, v] of Object.entries(r.state.facts)) cmp(`facts.${k}`, v, stored[k]);
       for (const k of Object.keys(stored)) if (!(k in r.state.facts)) differences.push({ field: `facts.${k}`, fromAudit: null, stored: stored[k] });
     }
-    const state = clear
-      ? r.state
-      : {
-          ...r.state,
-          openingText: maskText(r.state.openingText) as string | null,
-          answers: r.state.answers.map((a) => ({ ...a, answer: typeof a.answer === 'string' && a.answer.length > 24 ? maskText(a.answer) : a.answer })),
-          facts: Object.fromEntries(Object.entries(r.state.facts).map(([k, v]) => [k, typeof v === 'string' && v.length > 24 ? maskText(v) : v])),
-          decisions: r.state.decisions.map((d) => ({ ...d, reason: maskText(d.reason) as string | null })),
-        };
+    // The reconstruction state mirrors full-audit payload shapes. Reuse the central registry so
+    // explanation and every answer/fact primitive (including numbers/booleans) stay behind the
+    // same audited unmask gate as normal assessment and audit-log reads.
+    const state = clear ? r.state : (maskAuditPayload(r.state) as typeof r.state);
     const timeline = clear ? r.timeline : r.timeline.map((t) => ({ ...t, detail: {} as Record<string, unknown>, summary: t.action === 'assessment.answered' ? `Answered ${String((t.detail as { questionKey?: string }).questionKey ?? '?')}` : t.summary }));
+    const maskDifferenceValue = (field: string, value: unknown) =>
+      field.startsWith('facts.') || field.startsWith('answers.') || field === 'openingText' || field === 'result.explanation' || field === 'decision.reason'
+        ? maskText(value)
+        : value;
     return {
       assessmentId: id,
       plan: tenant.plan,
@@ -470,24 +508,24 @@ export const assessmentsService = {
       masked: clear ? null : classForSector(doc.sector),
       timeline,
       state,
-      conformance: { matches: differences.length === 0, differences: clear ? differences : differences.map((d) => ({ ...d, fromAudit: typeof d.fromAudit === 'string' ? maskText(d.fromAudit) : d.fromAudit, stored: typeof d.stored === 'string' ? maskText(d.stored) : d.stored })) },
+      conformance: { matches: differences.length === 0, differences: clear ? differences : differences.map((d) => ({ ...d, fromAudit: maskDifferenceValue(d.field, d.fromAudit), stored: maskDifferenceValue(d.field, d.stored) })) },
     };
   },
 
   /** T-061: reviewers the caller may escalate this assessment to (empty on FREE tenants). */
   async escalationTargets(user: AuthUser, tenant: AuthTenant, id: string) {
-    const doc = await loadFor(user, id);
+    const doc = await loadDecidableFor(user, tenant, id);
     return escalationCandidates(user, tenant, doc);
   },
 
-  async get(user: AuthUser, id: string, unmask = false) {
-    const doc = await loadFor(user, id);
+  async get(user: AuthUser, tenant: AuthTenant, id: string, unmask = false) {
+    const doc = await loadReadableFor(user, tenant, id);
     const v = await this.view(doc);
     return (await unmaskGate(user, doc, unmask, 'assessment')) ? { ...v, masked: null } : maskAssessmentView(v, doc.sector);
   },
 
-  async messages(user: AuthUser, id: string, unmask = false) {
-    const doc = await loadFor(user, id);
+  async messages(user: AuthUser, tenant: AuthTenant, id: string, unmask = false) {
+    const doc = await loadReadableFor(user, tenant, id);
     const msgs = await AssessmentMessageModel.find({ assessmentId: doc._id }).sort({ createdAt: 1, _id: 1 }).lean();
     return (await unmaskGate(user, doc, unmask, 'messages')) ? msgs : maskMessages(msgs, doc.sector);
   },
@@ -579,12 +617,14 @@ export const assessmentsService = {
     const counts = { ...byStatus, pending: PENDING_STATUSES.reduce((n, s) => n + byStatus[s], 0), all: grouped.reduce((n, g) => n + g.n, 0) };
     const privileged = isPrivilegedReader(user);
     return {
-      items: items.map((it) => ({
-        ...it,
-        result: it.result?.computedAt ? it.result : null,
-        decision: it.decision?.type ? it.decision : null,
-        ...(privileged && it.requestor?.email ? { requestor: { ...it.requestor, email: maskText(it.requestor.email) } } : {}),
-      })),
+      items: items.map((it) => {
+        const row = {
+          ...it,
+          result: it.result?.computedAt ? it.result : null,
+          decision: it.decision?.type ? it.decision : null,
+        };
+        return privileged ? maskAssessmentView(row, it.sector) : row;
+      }),
       total,
       page: q.page,
       limit: q.limit,

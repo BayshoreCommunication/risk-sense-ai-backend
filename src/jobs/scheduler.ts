@@ -1,6 +1,7 @@
 import { env } from '../config/env';
 import { logger } from '../lib/logger';
 import { audit } from '../modules/audit/service';
+import { conformanceService } from '../modules/conformance/service';
 import { retentionService } from '../modules/retention/service';
 
 /**
@@ -26,6 +27,8 @@ export function startScheduler() {
         const v = await audit.verify(r.tenantId);
         if (!v.ok) logger.error({ tenant: r.slug, firstBadSeq: v.firstBadSeq }, 'AUDIT CHAIN BROKEN');
       }
+      const conformance = await conformanceService.scan({ trigger: 'scheduler', actor: null, now });
+      logger.info({ results: conformance.map((r) => ({ tenant: r.slug, scanned: r.scanned, flagged: r.flagged })) }, 'assessment conformance scan done');
     } catch (err) {
       logger.error({ err }, 'scheduled job failed');
     }

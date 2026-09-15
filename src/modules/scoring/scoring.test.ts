@@ -4,7 +4,7 @@ import request from 'supertest';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { app, login, seeded } from '../../tests/helpers';
 import { classify, computeConfidence, computeFactors, computeScore, simulate, type MatrixLike } from './compute';
-import { FACTOR_KEYS } from './model';
+import { FACTOR_KEYS, ScoringMatrixModel } from './model';
 import { scoringService } from './service';
 
 const matrix: MatrixLike = {
@@ -97,7 +97,7 @@ describe('scoring matrices API + simulate + golden set', () => {
     expect(created.status).toBe(201);
     const id = created.body.data._id;
     expect((await request(app).post(`/api/v1/scoring-matrices/${id}/activate`).set(admin)).body.error.code).toBe('NOT_APPROVED');
-    expect((await request(app).post(`/api/v1/scoring-matrices/${id}/approve`).set(admin)).body.error.code).toBe('SELF_APPROVAL');
+    expect((await request(app).post(`/api/v1/scoring-matrices/${id}/approve`).set(admin).send({ changeRef: 'CR-7' })).body.error.code).toBe('SELF_APPROVAL');
     await request(app).post(`/api/v1/scoring-matrices/${id}/approve`).set(admin2).send({ changeRef: 'CR-7' });
     const act = await request(app).post(`/api/v1/scoring-matrices/${id}/activate`).set(admin);
     expect(act.body.data).toMatchObject({ status: 'active', isCurrent: true });
@@ -107,6 +107,46 @@ describe('scoring matrices API + simulate + golden set', () => {
     expect(sim.body.data.matrix.key).toBe('default');
     expect(sim.body.data.score).toBeGreaterThan(0);
     expect(FACTOR_KEYS.every((k) => k in sim.body.data.factors)).toBe(true);
+  });
+
+  it('an active-matrix edit preserves v1 and the effective-change editor cannot approve v2 [AI-05]', async () => {
+    const body = scoringService.parseSheet(starter.scoring).body!;
+    const created = await request(app).post('/api/v1/scoring-matrices').set(admin).send(body);
+    const id = created.body.data._id;
+    await request(app).post(`/api/v1/scoring-matrices/${id}/approve`).set(admin2).send({ changeRef: 'MATRIX-V1' });
+    await request(app).post(`/api/v1/scoring-matrices/${id}/activate`).set(admin);
+
+    const edit = await request(app).patch(`/api/v1/scoring-matrices/${id}`).set(admin2).send({ name: 'Edited default matrix' });
+    const replacementId = edit.body.data._id;
+    expect(edit.status).toBe(200);
+    expect(edit.body.data).toMatchObject({ version: 2, status: 'draft', isCurrent: false, name: 'Edited default matrix' });
+    expect(await ScoringMatrixModel.findById(id).lean()).toMatchObject({ version: 1, status: 'active', isCurrent: true, name: body.name });
+
+    const latestEdit = await request(app).patch(`/api/v1/scoring-matrices/${replacementId}`).set(admin).send({ name: 'Final reviewed matrix' });
+    expect(latestEdit.body.data).toMatchObject({ _id: replacementId, version: 2, status: 'draft', name: 'Final reviewed matrix' });
+    const missingRef = await request(app).post(`/api/v1/scoring-matrices/${replacementId}/approve`).set(admin2).send({});
+    expect(missingRef.status).toBe(400);
+    const self = await request(app).post(`/api/v1/scoring-matrices/${replacementId}/approve`).set(admin).send({ changeRef: 'MATRIX-V2' });
+    expect(self.status).toBe(422);
+    expect(self.body.error.code).toBe('SELF_APPROVAL');
+    expect((await ScoringMatrixModel.findById(id).lean())?.status).toBe('active');
+
+    expect((await request(app).post(`/api/v1/scoring-matrices/${replacementId}/approve`).set(admin2).send({ changeRef: 'MATRIX-V2' })).status).toBe(200);
+    await request(app).post(`/api/v1/scoring-matrices/${replacementId}/activate`).set(admin);
+    expect(await ScoringMatrixModel.findById(id).lean()).toMatchObject({ status: 'deactivated', isCurrent: false });
+    expect(await ScoringMatrixModel.findById(replacementId).lean()).toMatchObject({ status: 'active', isCurrent: true });
+  });
+
+  it('does not activate a legacy matrix whose approval record has no change reference [AI-05]', async () => {
+    const body = scoringService.parseSheet(starter.scoring).body!;
+    const created = await request(app).post('/api/v1/scoring-matrices').set(admin).send(body);
+    await request(app).post(`/api/v1/scoring-matrices/${created.body.data._id}/approve`).set(admin2).send({ changeRef: 'LEGACY-1' });
+    await ScoringMatrixModel.updateOne({ _id: created.body.data._id }, { $unset: { changeRef: 1 } });
+
+    const activation = await request(app).post(`/api/v1/scoring-matrices/${created.body.data._id}/activate`).set(admin);
+
+    expect(activation.status).toBe(422);
+    expect(activation.body.error.code).toBe('NOT_APPROVED');
   });
 
   it('golden set: the starter scoring sheet classifies the scenarios’ typical cases as expected [FR-18]', async () => {

@@ -1,4 +1,5 @@
 import { Types } from 'mongoose';
+import { RetryableTransactionCollisionError, inMongoTransaction, isMongoDuplicateKeyFor } from '../../lib/db';
 import { GENESIS_HASH, canonicalJson, sha256 } from '../../lib/hash';
 import { logger } from '../../lib/logger';
 import { AuditLogModel, type AuditCategory } from './model';
@@ -66,8 +67,11 @@ export const audit = {
             hash,
           });
         } catch (err) {
-          const dup = (err as { code?: number }).code === 11000;
-          if (!dup || attempt === 2) throw err;
+          const seqCollision = isMongoDuplicateKeyFor(err, ['tenantId', 'seq']);
+          // A duplicate write aborts a Mongo transaction. Retrying here would reuse that aborted
+          // session, so signal the outer transaction boundary to replay its complete DB-only unit.
+          if (seqCollision && inMongoTransaction()) throw new RetryableTransactionCollisionError('audit-sequence', err);
+          if (!seqCollision || attempt === 2) throw err;
           logger.warn({ tenantId: key, seq }, 'audit seq collision, retrying');
         }
       }

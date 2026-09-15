@@ -23,11 +23,14 @@ rulesRouter.post('/', ADMIN, validate({ body: RuleBody }), async (req, res) => {
 rulesRouter.get('/:id', READERS, validate({ params: IdParams }), async (req, res) => {
   ok(res, await rulesService.get(req.user!.tenantId, req.params.id as string));
 });
+rulesRouter.get('/:id/history', READERS, validate({ params: IdParams }), async (req, res) => {
+  ok(res, await rulesService.history(req.user!.tenantId, req.params.id as string));
+});
 rulesRouter.patch('/:id', ADMIN, validate({ params: IdParams, body: RulePatch }), async (req, res) => {
   ok(res, await rulesService.update(req.user!.tenantId, req.params.id as string, req.body, req.user!));
 });
 rulesRouter.post('/:id/approve', ADMIN, validate({ params: IdParams, body: ApproveBody }), async (req, res) => {
-  ok(res, await rulesService.approve(req.user!.tenantId, req.params.id as string, req.user!, (req.body as { changeRef?: string }).changeRef));
+  ok(res, await rulesService.approve(req.user!.tenantId, req.params.id as string, req.user!, (req.body as { changeRef: string }).changeRef));
 });
 rulesRouter.post('/:id/activate', ADMIN, validate({ params: IdParams }), async (req, res) => {
   ok(res, await rulesService.activate(req.user!.tenantId, req.params.id as string, req.user!));

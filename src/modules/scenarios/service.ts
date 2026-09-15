@@ -1,6 +1,6 @@
 import type { z } from 'zod';
 import { AppError } from '../../lib/errors';
-import { sha256 } from '../../lib/hash';
+import { canonicalJson, sha256 } from '../../lib/hash';
 import { versioned, type VersionedDoc } from '../../lib/versioned';
 import type { AuthUser } from '../../middleware/auth';
 import { personasService } from '../personas/service';
@@ -24,7 +24,18 @@ async function validateForActivation(doc: VersionedDoc) {
   if (flowKeys.length === 0) throw new AppError('NO_LINKED_QUESTIONS', 'scenario has no questions in its conversation flow (FR-12)');
 
   // Walk branches transitively so follow-up questions count as reachable.
-  const reachable = new Map<string, { factKey: string; branchKeys: string[] }>();
+  const reachable = new Map<
+    string,
+    {
+      key: string;
+      text: string;
+      type: string;
+      factKey: string;
+      required: boolean;
+      options: { id: string; label: string; factValue: unknown }[];
+      branchTrigger: { onValue: unknown; questionKeys: string[] } | null;
+    }
+  >();
   let frontier = [...new Set(flowKeys)];
   while (frontier.length) {
     const found = await questionsService.activeByKeys(tenantId, frontier);
@@ -34,7 +45,15 @@ async function validateForActivation(doc: VersionedDoc) {
     for (const q of found) {
       if (reachable.has(q.key)) continue;
       const branchKeys = q.branchTrigger?.questionKeys ?? [];
-      reachable.set(q.key, { factKey: q.factKey, branchKeys });
+      reachable.set(q.key, {
+        key: q.key,
+        text: q.text,
+        type: q.type,
+        factKey: q.factKey,
+        required: q.required,
+        options: (q.options ?? []).map((o) => ({ id: o.id, label: o.label, factValue: o.factValue })),
+        branchTrigger: branchKeys.length ? { onValue: q.branchTrigger?.onValue, questionKeys: [...branchKeys] } : null,
+      });
       next.push(...branchKeys.filter((k) => !reachable.has(k)));
     }
     frontier = [...new Set(next)];
@@ -46,8 +65,8 @@ async function validateForActivation(doc: VersionedDoc) {
     throw new AppError('VALIDATION_ERROR', `required facts have no question producing them: ${uncovered.join(', ')}`, { uncovered });
   }
 
-  const pinned = [...reachable.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([k, r]) => `${k}:${r.factKey}`);
-  doc.questionSetHash = sha256(pinned.join('|'));
+  const pinned = [...reachable.values()].sort((a, b) => a.key.localeCompare(b.key));
+  doc.questionSetHash = sha256(canonicalJson(pinned));
 }
 
 const v = versioned(ScenarioModel, {

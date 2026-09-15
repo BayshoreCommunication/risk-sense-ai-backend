@@ -3,9 +3,10 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { app, login, seeded } from '../tests/helpers';
 import { AssessmentMessageModel, AssessmentModel } from '../modules/assessments/model';
 import { AuditLogModel } from '../modules/audit/model';
+import { audit } from '../modules/audit/service';
 import { DepartmentModel } from '../modules/tenants/model';
 import { UserModel } from '../modules/users/model';
-import { classFor, maskAssessmentView, maskText } from './sensitive';
+import { classFor, maskAssessmentView, maskAuditPayload, maskText } from './sensitive';
 
 /** SEC-05: sensitive fields are masked for non-acting readers; unmasking is logged; exports never carry them. */
 describe('sensitive field masking [SEC-05, FR-23]', () => {
@@ -31,6 +32,8 @@ describe('sensitive field masking [SEC-05, FR-23]', () => {
     await AssessmentMessageModel.create([
       { tenantId: acme._id, assessmentId: doc._id, role: 'user', kind: 'answer', content: SECRET },
       { tenantId: acme._id, assessmentId: doc._id, role: 'assistant', kind: 'question', content: 'Was the incident reported?' },
+      { tenantId: acme._id, assessmentId: doc._id, role: 'assistant', kind: 'result', content: `Result summary: ${SECRET}` },
+      { tenantId: acme._id, assessmentId: doc._id, role: 'system', kind: 'info', content: 'Assessment processing complete.' },
     ]);
     admin = await login('admin@paid.local');
     owner = await login('requestor@paid.local');
@@ -42,12 +45,26 @@ describe('sensitive field masking [SEC-05, FR-23]', () => {
     expect(classFor('it')).toBe('pii');
     expect(maskText('jane.doe@acme.com')).toBe('j•••@acme.com');
     expect(maskText(SECRET)).toBe(`P••• (${SECRET.length} chars)`);
-    expect(maskText(42)).toBe(42);
+    expect(maskText(42)).toBe('•••');
     expect(maskText('')).toBe('');
-    const v = maskAssessmentView({ openingText: 'abc', facts: [{ source: 'ai', value: 'x-ray' }, { source: 'mcq', value: 'yes' }], decision: { reason: 'why' } }, 'healthcare');
+    const v = maskAssessmentView(
+      {
+        openingText: 'abc',
+        facts: [{ source: 'ai', value: 'x-ray' }, { source: 'mcq', value: 'yes' }],
+        decision: { reason: 'why' },
+        requestor: { name: 'Jane Doe', email: 'jane@example.com' },
+        escalatedTo: { name: 'John Doe' },
+      },
+      'healthcare',
+    );
     expect(v.masked).toBe('phi');
     expect(v.openingText).toBe('a••• (3 chars)');
     expect((v.facts as { value: unknown }[]).map((f) => f.value)).toEqual(['x••• (5 chars)', 'yes']);
+    expect(v.requestor).toEqual({ name: 'J••• (8 chars)', email: 'j•••@example.com' });
+    expect(v.escalatedTo).toEqual({ name: 'J••• (8 chars)' });
+    expect(maskAuditPayload({ user: { name: 'Jane Doe', email: 'jane@example.com' } })).toEqual({
+      user: { name: 'J••• (8 chars)', email: 'j•••@example.com' },
+    });
   });
 
   it('administrators read masked; unmask=true returns clear values and is audited; the owner always reads clear', async () => {
@@ -57,7 +74,7 @@ describe('sensitive field masking [SEC-05, FR-23]', () => {
     expect(masked.facts.find((f: { key: string }) => f.key === 'harm').value).not.toContain('John');
     expect(masked.facts.find((f: { key: string }) => f.key === 'reported').value).toBe(true);
     expect(masked.decision.reason).not.toContain('John');
-    expect(masked.result.explanation).toContain('wrong dose'); // AI prose is not a registered field
+    expect(masked.result.explanation).not.toContain('wrong dose');
     const msgs = (await request(app).get(`/api/v1/assessments/${id}/messages`).set(admin)).body.data;
     expect(msgs[0].content).not.toContain('John');
     expect(msgs[0].masked).toBe('phi');
@@ -79,9 +96,28 @@ describe('sensitive field masking [SEC-05, FR-23]', () => {
     expect(await AuditLogModel.countDocuments({ action: 'access.unmasked' })).toBe(1); // the owner's read is not an unmask event
   });
 
-  it('list rows mask the requestor email for privileged readers; reconstruction masks user text and payloads unless unmasked', async () => {
+  it('masks assistant result messages while preserving question and system messages [SEC-05]', async () => {
+    const messages = (await request(app).get(`/api/v1/assessments/${id}/messages`).set(admin)).body.data as Array<Record<string, unknown>>;
+    const result = messages.find((message) => message.kind === 'result')!;
+    const question = messages.find((message) => message.kind === 'question')!;
+    const system = messages.find((message) => message.role === 'system')!;
+
+    expect(result).toMatchObject({ role: 'assistant', kind: 'result', masked: 'phi' });
+    expect(result.content).not.toContain('John Doe');
+    expect(question.content).toBe('Was the incident reported?');
+    expect(question).not.toHaveProperty('masked');
+    expect(system.content).toBe('Assessment processing complete.');
+    expect(system).not.toHaveProperty('masked');
+
+    const ownerMessages = (await request(app).get(`/api/v1/assessments/${id}/messages`).set(owner)).body.data as Array<Record<string, unknown>>;
+    expect(ownerMessages.find((message) => message.kind === 'result')!.content).toContain('John Doe');
+  });
+
+  it('list rows mask registered identity and explanation fields for privileged readers; reconstruction masks user text and payloads unless unmasked [SEC-05, SEC-07]', async () => {
     const rows = (await request(app).get('/api/v1/assessments').set(admin)).body.data.items;
-    expect(rows[0].requestor).toMatchObject({ name: 'Acme Finance Requestor', email: 'r•••@paid.local' });
+    expect(rows[0].requestor).toMatchObject({ name: 'A••• (22 chars)', email: 'r•••@paid.local' });
+    expect(rows[0].result.explanation).not.toContain('wrong dose');
+    expect(rows[0].masked).toBe('phi');
     const ownRows = (await request(app).get('/api/v1/assessments').set(owner)).body.data.items;
     expect(ownRows[0].requestor.email).toBe('requestor@paid.local');
     const rec = (await request(app).get(`/api/v1/assessments/${id}/reconstruct`).set(admin)).body.data;
@@ -90,6 +126,66 @@ describe('sensitive field masking [SEC-05, FR-23]', () => {
     const recClear = (await request(app).get(`/api/v1/assessments/${id}/reconstruct`).set(admin).query({ unmask: 'true' })).body.data;
     expect(recClear.masked).toBeNull();
     expect(await AuditLogModel.countDocuments({ action: 'access.unmasked', 'payload.what': 'reconstruction' })).toBe(1);
+  });
+
+  it('masks result prose and every answer/fact primitive in reconstruction and differences [SEC-05, FR-26]', async () => {
+    const doc = (await AssessmentModel.findById(id))!;
+    await audit.write({
+      tenantId: String(doc.tenantId),
+      category: 'assessment',
+      action: 'assessment.answered',
+      actor: null,
+      entity: { type: 'assessment', id },
+      payload: { questionKey: 'diagnosis', answer: 'HIV', facts: [{ key: 'diagnosis', value: 'HIV' }], branched: [] },
+    });
+    await audit.write({
+      tenantId: String(doc.tenantId),
+      category: 'assessment',
+      action: 'assessment.answered',
+      actor: null,
+      entity: { type: 'assessment', id },
+      payload: { questionKey: 'memberNumber', answer: 4471, facts: [{ key: 'memberNumber', value: 4471 }], branched: [] },
+    });
+    await audit.write({
+      tenantId: String(doc.tenantId),
+      category: 'assessment',
+      action: 'assessment.scored',
+      actor: null,
+      entity: { type: 'assessment', id },
+      payload: { score: 70, computedClassification: 'elevated_risk', factors: { severity: 80 } },
+    });
+    await audit.write({
+      tenantId: String(doc.tenantId),
+      category: 'assessment',
+      action: 'assessment.recommended',
+      actor: null,
+      entity: { type: 'assessment', id },
+      payload: { classification: 'elevated_risk', confidence: 88, ruleDriven: false, recommendedAction: 'Manage the Risk', explanation: SECRET },
+    });
+
+    const masked = (await request(app).get(`/api/v1/assessments/${id}/reconstruct`).set(admin)).body.data;
+    expect(masked.state.answers[0].answer).toBe('H••• (3 chars)');
+    expect(masked.state.answers[1].answer).toBe('•••');
+    expect(masked.state.facts.diagnosis).toBe('H••• (3 chars)');
+    expect(masked.state.facts.memberNumber).toBe('•••');
+    expect(masked.state.explanation).toBe(`P••• (${SECRET.length} chars)`);
+    expect(masked.state.score).toBe(70);
+    expect(masked.state.confidence).toBe(88);
+    expect(masked.conformance.differences.find((difference: { field: string }) => difference.field === 'facts.memberNumber')).toMatchObject({
+      fromAudit: '•••',
+      stored: null,
+    });
+
+    const clear = (await request(app).get(`/api/v1/assessments/${id}/reconstruct`).set(admin).query({ unmask: 'true' })).body.data;
+    expect(clear.state.answers[0].answer).toBe('HIV');
+    expect(clear.state.answers[1].answer).toBe(4471);
+    expect(clear.state.facts.diagnosis).toBe('HIV');
+    expect(clear.state.facts.memberNumber).toBe(4471);
+    expect(clear.state.explanation).toBe(SECRET);
+    expect(clear.conformance.differences.find((difference: { field: string }) => difference.field === 'facts.memberNumber')).toMatchObject({
+      fromAudit: 4471,
+      stored: null,
+    });
   });
 
   it('report override reasons are masked for privileged readers unless unmasked (audited); exports never contain free text', async () => {

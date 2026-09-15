@@ -26,11 +26,11 @@ assessmentsRouter.get('/', READERS, validate({ query: ListQuery }), async (req, 
 const unmask = (req: { query: unknown }) => (req.query as { unmask?: boolean }).unmask === true;
 
 assessmentsRouter.get('/:id', READERS, validate({ params: IdParams, query: UnmaskQuery }), async (req, res) => {
-  ok(res, await assessmentsService.get(req.user!, req.params.id as string, unmask(req)));
+  ok(res, await assessmentsService.get(req.user!, req.tenant!, req.params.id as string, unmask(req)));
 });
 
 assessmentsRouter.get('/:id/messages', READERS, validate({ params: IdParams, query: UnmaskQuery }), async (req, res) => {
-  ok(res, await assessmentsService.messages(req.user!, req.params.id as string, unmask(req)));
+  ok(res, await assessmentsService.messages(req.user!, req.tenant!, req.params.id as string, unmask(req)));
 });
 
 assessmentsRouter.post('/:id/persona', REQUESTOR, validate({ params: IdParams, body: PersonaBody }), async (req, res) => {

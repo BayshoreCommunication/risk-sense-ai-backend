@@ -31,7 +31,7 @@ matricesRouter.patch('/:id', ADMIN, validate({ params: IdParams, body: MatrixPat
   ok(res, await scoringService.update(req.user!.tenantId, req.params.id as string, req.body, req.user!));
 });
 matricesRouter.post('/:id/approve', ADMIN, validate({ params: IdParams, body: ApproveBody }), async (req, res) => {
-  ok(res, await scoringService.approve(req.user!.tenantId, req.params.id as string, req.user!, (req.body as { changeRef?: string }).changeRef));
+  ok(res, await scoringService.approve(req.user!.tenantId, req.params.id as string, req.user!, (req.body as { changeRef: string }).changeRef));
 });
 matricesRouter.post('/:id/activate', ADMIN, validate({ params: IdParams }), async (req, res) => {
   ok(res, await scoringService.activate(req.user!.tenantId, req.params.id as string, req.user!));

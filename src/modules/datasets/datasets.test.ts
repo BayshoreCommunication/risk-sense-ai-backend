@@ -1,10 +1,14 @@
 import request from 'supertest';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { app, login, seeded } from '../../tests/helpers';
 import { AuditLogModel } from '../audit/model';
+import { audit } from '../audit/service';
 import { PersonaModel } from '../personas/model';
 import { QuestionModel } from '../questions/model';
+import { RuleModel } from '../rules/model';
 import { ScenarioModel } from '../scenarios/model';
+import { ScoringMatrixModel } from '../scoring/model';
+import { DatasetModel } from './model';
 import { buildTemplateWorkbook, SAMPLE } from './template';
 
 describe('datasets (FR-13, FR-14, AI-04, AI-06)', () => {
@@ -15,6 +19,10 @@ describe('datasets (FR-13, FR-14, AI-04, AI-06)', () => {
     await seeded();
     admin = await login('admin@dev.local');
     admin2 = await login('admin2@dev.local');
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   const uploadJson = (h: Record<string, string>, content: unknown, fileName = 'sample.json') =>
@@ -97,6 +105,62 @@ describe('datasets (FR-13, FR-14, AI-04, AI-06)', () => {
     const branch = await QuestionModel.findOne({ key: 'fin_q06_fraud_suspected' }).lean();
     expect(branch?.branchTrigger?.onValue).toBe(true);
     expect(await AuditLogModel.countDocuments({ action: 'dataset.activated' })).toBe(1);
+  });
+
+  it('the dataset author remains maker when its reviewer performs activation [AI-05, AI-06]', async () => {
+    const up = await uploadJson(admin, SAMPLE);
+    const id = up.body.data._id;
+    await request(app).post(`/api/v1/datasets/${id}/approve`).set(admin2);
+
+    const activated = await request(app).post(`/api/v1/datasets/${id}/activate`).set(admin2);
+    expect(activated.status, JSON.stringify(activated.body)).toBe(200);
+
+    const [matrix, rule, dataset] = await Promise.all([
+      ScoringMatrixModel.findOne({ status: 'active' }).lean(),
+      RuleModel.findOne({ status: 'active' }).lean(),
+      DatasetModel.findById(id).lean(),
+    ]);
+    expect(String(matrix?.createdBy)).toBe(String(dataset?.authorId));
+    expect(String(rule?.createdBy)).toBe(String(dataset?.authorId));
+    expect(String(matrix?.approvedBy)).toBe(String(dataset?.reviewerId));
+    expect(String(rule?.approvedBy)).toBe(String(dataset?.reviewerId));
+  });
+
+  it('a failed activation rolls back every content and activation-audit write [FR-13]', async () => {
+    const up = await uploadJson(admin, SAMPLE);
+    const id = up.body.data._id;
+    await request(app).post(`/api/v1/datasets/${id}/approve`).set(admin2);
+    const writeAudit = audit.write.bind(audit);
+    vi.spyOn(audit, 'write').mockImplementation(async (entry) => {
+      if (entry.action === 'dataset.activated') throw new Error('forced final activation failure');
+      return writeAudit(entry);
+    });
+
+    const res = await request(app).post(`/api/v1/datasets/${id}/activate`).set(admin);
+    expect(res.status).toBe(500);
+
+    expect(await PersonaModel.countDocuments()).toBe(0);
+    expect(await QuestionModel.countDocuments()).toBe(0);
+    expect(await ScenarioModel.countDocuments()).toBe(0);
+    expect(await RuleModel.countDocuments()).toBe(0);
+    expect(await ScoringMatrixModel.countDocuments()).toBe(0);
+    expect(await AuditLogModel.countDocuments({ action: /^(persona|question|scenario|rule|scoring_matrix)\./ })).toBe(0);
+
+    const failed = await DatasetModel.findById(id).lean();
+    expect(failed).toMatchObject({
+      status: 'failed',
+      failure: 'forced final activation failure',
+      applied: { personas: [], questions: [], scenarios: [], rules: [] },
+    });
+    expect(failed?.activatedAt).toBeUndefined();
+    expect(await AuditLogModel.countDocuments({ action: 'dataset.activated' })).toBe(0);
+    expect(await AuditLogModel.countDocuments({ action: 'dataset.failed' })).toBe(1);
+
+    const retry = await request(app).post(`/api/v1/datasets/${id}/activate`).set(admin);
+    expect(retry.status).toBe(422);
+    expect(retry.body.error.code).toBe('NOT_APPROVED');
+    expect(await PersonaModel.countDocuments()).toBe(0);
+    expect(await AuditLogModel.countDocuments({ action: 'dataset.failed' })).toBe(1);
   });
 
   it('re-uploading changed content creates new versions instead of overwriting [FR-11, AI-04]', async () => {

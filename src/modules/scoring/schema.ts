@@ -56,5 +56,5 @@ export const SimulateBody = z.object({
 });
 export type SimulateBody = z.infer<typeof SimulateBody>;
 
-export const ApproveBody = z.object({ changeRef: z.string().max(200).optional() }).default({});
+export const ApproveBody = z.object({ changeRef: z.string().trim().min(1).max(200) }).strict();
 export const IdParams = z.object({ id: z.string().min(1) });

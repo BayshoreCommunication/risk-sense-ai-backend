@@ -47,11 +47,11 @@ describe('SSO via Firebase OIDC/OAuth providers [FR-03, SEC-03]', () => {
     expect(created!.payload).toMatchObject({ signInProvider: 'oidc.acme' });
   });
 
-  it('the same account through password/Google still needs the OTP; privileged roles always do [SEC-03]', async () => {
+  it('paid requestors must use configured SSO; privileged roles also complete OTP [FR-03, SEC-03]', async () => {
     await bearer('uid:sso-2:bob@acme.com:-:oidc.acme');
     const pw = await bearer('uid:sso-2:bob@acme.com:-:password');
     expect(pw.status).toBe(401);
-    expect(pw.body.error.code).toBe('OTP_REQUIRED');
+    expect(pw.body.error.code).toBe('SSO_REQUIRED');
     // an administrator of the tenant signing in through SSO still completes our second factor
     await UserModel.create({ firebaseUid: 'dev:sso-admin', email: 'ops@acme.com', name: 'Acme Ops', role: 'administrator', tenantId: (await TenantModel.findOne({ slug: 'acme' }))!._id, mfaEnrolled: true });
     const admin = await bearer('uid:sso-admin-uid:ops@acme.com:-:oidc.acme');
@@ -61,7 +61,14 @@ describe('SSO via Firebase OIDC/OAuth providers [FR-03, SEC-03]', () => {
     await TenantModel.updateOne({ slug: 'acme' }, { $set: { 'features.sso': false } });
     const off = await bearer('uid:sso-2:bob@acme.com:-:oidc.acme');
     expect(off.status).toBe(401);
-    expect(off.body.error.code).toBe('OTP_REQUIRED');
+    expect(off.body.error.code).toBe('SSO_REQUIRED');
+  });
+
+  it('does not JIT-provision a paid-domain identity authenticated by the wrong provider [FR-03]', async () => {
+    const res = await bearer('uid:wrong-provider:intruder@acme.com:-:google.com');
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('SSO_REQUIRED');
+    expect(await UserModel.countDocuments({ email: 'intruder@acme.com' })).toBe(0);
   });
 
   it('system administrators configure SSO and policies for their tenant; changes are audited [FR-03, FR-25, SEC-02]', async () => {

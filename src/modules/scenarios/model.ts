@@ -43,7 +43,7 @@ const scenarioSchema = new Schema(
       elevated_risk: { type: actionSchema },
       issue: { type: actionSchema },
     },
-    // Filled at activation: sha256 of the sorted active question keys + factKeys the flow uses (AI-04 pin).
+    // Filled at activation: sha256 of every executable field in the sorted reachable question set (AI-04 pin).
     questionSetHash: { type: String },
     ...versionedFields,
   },

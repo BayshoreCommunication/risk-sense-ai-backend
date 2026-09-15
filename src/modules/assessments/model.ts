@@ -23,6 +23,46 @@ const factSchema = new Schema(
 );
 const pinSchema = new Schema({ id: { type: Schema.Types.ObjectId }, version: { type: Number } }, { _id: false });
 
+const pinnedQuestionOptionSchema = new Schema(
+  { id: { type: String, required: true }, label: { type: String, required: true }, factValue: { type: Schema.Types.Mixed, required: true } },
+  { _id: false },
+);
+const pinnedQuestionSchema = new Schema(
+  {
+    key: { type: String, required: true },
+    text: { type: String, required: true },
+    type: { type: String, enum: ['mcq', 'yes_no', 'free_text', 'number'], required: true },
+    factKey: { type: String, required: true },
+    required: { type: Boolean, required: true },
+    options: { type: [pinnedQuestionOptionSchema], default: [] },
+    branchTrigger: {
+      onValue: { type: Schema.Types.Mixed },
+      questionKeys: { type: [String], default: [] },
+    },
+  },
+  { _id: false },
+);
+const pinnedRuleSchema = new Schema(
+  {
+    id: { type: String, required: true },
+    key: { type: String, required: true },
+    name: { type: String, required: true },
+    trigger: { type: Schema.Types.Mixed, required: true },
+    forcedClassification: { type: String, enum: CLASSIFICATIONS, required: true },
+    forcedAction: { type: String },
+    priority: { type: Number, required: true },
+  },
+  { _id: false },
+);
+const pinnedContentSchema = new Schema(
+  {
+    personaVocabulary: { type: [String], default: [] },
+    questions: { type: [pinnedQuestionSchema], default: [] },
+    rules: { type: [pinnedRuleSchema], default: [] },
+  },
+  { _id: false },
+);
+
 /**
  * One intake session and its outcome (Database.md). Invariants enforced here, not only in the UI:
  *  - `closed` requires a recorded human decision (AI-01, FR-22);
@@ -45,6 +85,7 @@ const assessmentSchema = new Schema(
     sector: { type: String },
 
     versions: {
+      contentTenantId: { type: Schema.Types.ObjectId },
       persona: { type: pinSchema },
       scenario: { type: pinSchema },
       questionSetHash: { type: String },
@@ -53,6 +94,9 @@ const assessmentSchema = new Schema(
       promptVersion: { type: String },
       aiProvider: { type: String },
     },
+    // Questions are edited in place; the rule list can gain/retire versions. Freeze both executable sets here.
+    // Scenario and matrix documents use copy-on-write and are loaded by the version pins above (AI-04).
+    pinnedContent: { type: pinnedContentSchema },
 
     answers: { type: [answerSchema], default: [] },
     facts: { type: [factSchema], default: [] },
@@ -92,6 +136,7 @@ const assessmentSchema = new Schema(
     retention: {
       flaggedAt: { type: Date },
       enforcedAt: { type: Date },
+      auditRecordedAt: { type: Date },
       mode: { type: String, enum: ['reduced', 'archived'] },
       reason: { type: String },
     },

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import type { HydratedDocument } from 'mongoose';
+import { Types, type HydratedDocument } from 'mongoose';
 import { AppError } from '../../lib/errors';
 import { ok } from '../../lib/http';
 import { authenticate } from '../../middleware/auth';
@@ -7,12 +7,91 @@ import { requireRole } from '../../middleware/rbac';
 import { requireSession } from '../../middleware/session';
 import { validate } from '../../middleware/validate';
 import { audit } from '../audit/service';
+import { conformanceService } from '../conformance/service';
 import { TenantModel, type Tenant } from '../tenants/model';
-import { TenantPatch } from './schema';
+import { ConformanceFlagsQuery, DrStatusPatch, SystemDepartmentCreate, SystemDepartmentPatch, SystemIdParams, SystemUserCreate, SystemUserPatch, TenantPatch } from './schema';
+import { directoryService } from './directory.service';
+import { DrStatusModel } from './dr.model';
 
 /** System administrator (Bayshore) — tenant configuration. All changes are audited as config changes (FR-25). */
 export const systemRouter = Router();
 systemRouter.use(authenticate, requireSession, requireRole('system_administrator'));
+
+systemRouter.get('/users', async (req, res) => {
+  ok(res, await directoryService.users(req.user!.tenantId));
+});
+
+systemRouter.post('/users', validate({ body: SystemUserCreate }), async (req, res) => {
+  ok(res, await directoryService.createUser(req.user!.tenantId, req.body as SystemUserCreate, req.user!), 201);
+});
+
+systemRouter.patch('/users/:id', validate({ params: SystemIdParams, body: SystemUserPatch }), async (req, res) => {
+  ok(res, await directoryService.updateUser(req.user!.tenantId, String(req.params.id), req.body as SystemUserPatch, req.user!));
+});
+
+systemRouter.get('/departments', async (req, res) => {
+  ok(res, await directoryService.departments(req.user!.tenantId));
+});
+
+systemRouter.get('/personas', async (req, res) => {
+  ok(res, await directoryService.personas(req.user!.tenantId));
+});
+
+systemRouter.post('/departments', validate({ body: SystemDepartmentCreate }), async (req, res) => {
+  ok(res, await directoryService.createDepartment(req.user!.tenantId, req.body as SystemDepartmentCreate, req.user!), 201);
+});
+
+systemRouter.patch('/departments/:id', validate({ params: SystemIdParams, body: SystemDepartmentPatch }), async (req, res) => {
+  ok(res, await directoryService.updateDepartment(req.user!.tenantId, String(req.params.id), req.body as SystemDepartmentPatch, req.user!));
+});
+
+const drView = (status: InstanceType<typeof DrStatusModel> | null) => {
+  const backupFresh = Boolean(status?.backupsEnabled && status.lastBackupAt && status.lastBackupAt.getTime() >= Date.now() - 24 * 60 * 60 * 1_000);
+  const drillCurrent = Boolean(status?.lastRestoreDrillOutcome === 'passed' && status.lastRestoreDrillAt && status.lastRestoreDrillAt.getTime() >= Date.now() - 365 * 24 * 60 * 60 * 1_000);
+  return {
+    provider: status?.provider ?? null,
+    backupsEnabled: status?.backupsEnabled ?? false,
+    lastBackupAt: status?.lastBackupAt ?? null,
+    lastRestoreDrillAt: status?.lastRestoreDrillAt ?? null,
+    lastRestoreDrillOutcome: status?.lastRestoreDrillOutcome ?? null,
+    evidenceRef: status?.evidenceRef ?? null,
+    targets: { backupFrequencyHours: 24, rpoHours: 1, rtoHours: 4, drillFrequencyDays: 365 },
+    checks: { backupFresh, drillCurrent, externalEvidenceRecorded: Boolean(status?.evidenceRef) },
+    readiness: backupFresh && drillCurrent && status?.evidenceRef ? 'ready' : 'attention_required',
+    updatedAt: (status as unknown as { updatedAt?: Date } | null)?.updatedAt ?? null,
+  };
+};
+
+/** GET/PATCH /system/dr/status — records external backup/PITR evidence; it never fabricates provider state. */
+systemRouter.get('/dr/status', async (req, res) => {
+  ok(res, drView(await DrStatusModel.findOne({ tenantId: req.user!.tenantId })));
+});
+
+systemRouter.patch('/dr/status', validate({ body: DrStatusPatch }), async (req, res) => {
+  const body = req.body as DrStatusPatch;
+  const status = (await DrStatusModel.findOne({ tenantId: req.user!.tenantId })) ?? new DrStatusModel({ tenantId: req.user!.tenantId });
+  const before = drView(status.isNew ? null : status);
+  for (const [key, value] of Object.entries(body)) status.set(key, value ?? undefined);
+  status.recordedBy = new Types.ObjectId(req.user!.id);
+  await status.save();
+  const after = drView(status);
+  await audit.write({ tenantId: req.user!.tenantId, category: 'config', action: 'dr.status_recorded', actor: req.user!, entity: { type: 'dr_status', id: String(status._id) }, payload: { before, after, changed: Object.keys(body) } });
+  ok(res, after);
+});
+
+systemRouter.post('/conformance/run', async (req, res) => {
+  const [result] = await conformanceService.scan({ tenantId: req.user!.tenantId, trigger: 'manual', actor: req.user! });
+  ok(res, result);
+});
+
+systemRouter.get('/conformance/runs', async (req, res) => {
+  ok(res, await conformanceService.runs(req.user!.tenantId));
+});
+
+systemRouter.get('/conformance/flags', validate({ query: ConformanceFlagsQuery }), async (req, res) => {
+  const { includeResolved } = req.query as unknown as { includeResolved: boolean };
+  ok(res, await conformanceService.flags(req.user!.tenantId, includeResolved));
+});
 
 const view = (t: HydratedDocument<Tenant>) => ({
   _id: String(t._id),

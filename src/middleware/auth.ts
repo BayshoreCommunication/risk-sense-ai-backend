@@ -44,9 +44,11 @@ export const authenticate: RequestHandler = async (req, _res, next) => {
   let user;
   let tokenMfa = false;
   let signInProvider: string | undefined;
+  let verifiedUid: string | undefined;
 
   if (header?.startsWith('Bearer ')) {
     const token = await verifyIdToken(header.slice('Bearer '.length).trim());
+    verifiedUid = token.uid;
     tokenMfa = token.mfa;
     signInProvider = token.signInProvider;
     user = await UserModel.findOne({ firebaseUid: token.uid }).lean();
@@ -57,6 +59,7 @@ export const authenticate: RequestHandler = async (req, _res, next) => {
         email: token.email,
         name: token.name,
         mfa: token.mfa,
+        signInProvider: token.signInProvider,
       });
       user = created.toObject();
     }
@@ -67,14 +70,28 @@ export const authenticate: RequestHandler = async (req, _res, next) => {
   }
 
   if (!user) throw new AppError('UNAUTHENTICATED', 'User is not provisioned');
-  if (user.status !== 'active') throw new AppError('FORBIDDEN', 'Account is disabled');
+  // A disabled identity cannot keep using (or refreshing) an application session. Treat it as an
+  // invalid session so every client follows the same secure sign-out path.
+  if (user.status !== 'active') throw new AppError('SESSION_INVALID', 'Account is disabled');
 
   const tenant = await TenantModel.findById(user.tenantId).lean();
   if (!tenant) throw new AppError('UNAUTHENTICATED', 'Tenant missing');
 
+  // FR-03: paid requestors/administrators must authenticate through the tenant's configured IdP.
+  // The local dev bypass remains available only outside production for seeded development accounts.
+  const paidSsoRole = user.role === 'requestor' || user.role === 'administrator';
+  if (header && tenant.plan === 'paid' && paidSsoRole) {
+    const providerId = tenant.features.sso ? tenant.sso?.providerId : null;
+    if (!providerId || signInProvider !== providerId) {
+      throw new AppError('SSO_REQUIRED', 'Use your organization\'s configured SSO provider');
+    }
+  }
+
   req.user = {
     id: String(user._id),
-    firebaseUid: user.firebaseUid,
+    // For an invited `dev:` account this is the verified candidate uid. The database binding is
+    // finalized only after POST /auth/session completes every required factor.
+    firebaseUid: verifiedUid ?? user.firebaseUid,
     email: user.email,
     name: user.name,
     role: user.role,

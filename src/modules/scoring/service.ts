@@ -13,7 +13,9 @@ import { MatrixBody, type MatrixListQuery, type MatrixPatch, type SimulateBody }
 
 /** Activation requires an approval record from someone other than the author (AI-05). */
 async function validateForActivation(doc: VersionedDoc) {
-  if (!doc.approvedBy) throw new AppError('NOT_APPROVED', 'scoring matrix needs an approval record before activation (AI-05)');
+  if (!doc.approvedBy || !doc.approvedAt || typeof doc.changeRef !== 'string' || !doc.changeRef.trim()) {
+    throw new AppError('NOT_APPROVED', 'scoring matrix needs a complete approval record before activation (AI-05)');
+  }
 }
 
 const v = versioned(ScoringMatrixModel, { entityType: 'scoring_matrix', immutable: ['key'], validateForActivation });
@@ -31,9 +33,14 @@ export const scoringService = {
   },
   get: (tenantId: string, id: string) => v.load(tenantId, id),
   create: (tenantId: string, body: MatrixBody, actor: AuthUser) => v.createDraft(tenantId, body, actor),
-  /** Editing clears any approval on the draft (a changed matrix must be re-approved, AI-05). */
+  /** Editing transfers maker identity to the latest editor and clears approval (AI-05). */
   async update(tenantId: string, id: string, patch: z.infer<typeof MatrixPatch>, actor: AuthUser) {
-    const doc = await v.updateAsNewVersion(tenantId, id, { ...patch, approvedBy: undefined, approvedAt: undefined, changeRef: undefined }, actor);
+    const doc = await v.updateAsNewVersion(
+      tenantId,
+      id,
+      { ...patch, createdBy: actor.id, approvedBy: undefined, approvedAt: undefined, changeRef: undefined },
+      actor,
+    );
     if (doc.approvedBy) {
       doc.approvedBy = undefined;
       doc.approvedAt = undefined;
@@ -42,7 +49,7 @@ export const scoringService = {
     }
     return doc;
   },
-  async approve(tenantId: string, id: string, approver: AuthUser, changeRef?: string) {
+  async approve(tenantId: string, id: string, approver: AuthUser, changeRef: string) {
     const doc = await v.load(tenantId, id);
     if (doc.status !== 'draft') throw new AppError('CONFLICT', `matrix version is ${doc.status}; only drafts can be approved`);
     if (String(doc.createdBy) === approver.id) throw new AppError('SELF_APPROVAL', 'a scoring matrix must be approved by an administrator other than its author (AI-05/AI-06)');
@@ -50,7 +57,7 @@ export const scoringService = {
     doc.approvedAt = new Date();
     doc.changeRef = changeRef;
     await doc.save();
-    await audit.write({ tenantId, category: 'config', action: 'scoring_matrix.approved', actor: approver, entity: { type: 'scoring_matrix', id, version: doc.version }, payload: { changeRef: changeRef ?? null } });
+    await audit.write({ tenantId, category: 'config', action: 'scoring_matrix.approved', actor: approver, entity: { type: 'scoring_matrix', id, version: doc.version }, payload: { changeRef } });
     return doc;
   },
   activate: (tenantId: string, id: string, actor: AuthUser) => v.activate(tenantId, id, actor),

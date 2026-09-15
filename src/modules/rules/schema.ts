@@ -22,5 +22,5 @@ export const RuleListQuery = z.object({
   sector: z.enum(CONTENT_SECTORS).optional(),
 });
 
-export const ApproveBody = z.object({ changeRef: z.string().max(200).optional() }).default({});
+export const ApproveBody = z.object({ changeRef: z.string().trim().min(1).max(200) }).strict();
 export const IdParams = z.object({ id: z.string().min(1) });

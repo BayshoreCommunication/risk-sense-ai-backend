@@ -15,8 +15,10 @@ vi.mock('../../lib/firebase', () => ({
 
 import { app, seeded } from '../../tests/helpers';
 import { AuditLogModel } from '../audit/model';
+import { audit } from '../audit/service';
 import { TenantModel } from '../tenants/model';
 import { UserModel } from '../users/model';
+import { SessionModel } from './model';
 
 describe('Firebase bearer login', () => {
   beforeEach(async () => {
@@ -42,13 +44,70 @@ describe('Firebase bearer login', () => {
     expect(signup).toBeTruthy();
   });
 
-  it('links a pre-provisioned (dev:) account to its real uid on first Firebase login instead of duplicating [FR-02]', async () => {
+  it('rolls back self-signup when its audit fails, then provisions normally on retry [FR-01, FR-02, SEC-07]', async () => {
+    const writeAudit = audit.write.bind(audit);
+    const writeSpy = vi.spyOn(audit, 'write').mockImplementation(async (entry) => {
+      if (entry.action === 'auth.self_signup') throw new Error('forced self-signup audit failure');
+      return writeAudit(entry);
+    });
+    const failed = await request(app).post('/api/v1/auth/session').set('Authorization', 'Bearer uid:atomic-new:new.atomic@example.com');
+    writeSpy.mockRestore();
+
+    expect(failed.status).toBe(500);
+    expect(await UserModel.countDocuments({ email: 'new.atomic@example.com' })).toBe(0);
+    expect(await AuditLogModel.countDocuments({ action: 'auth.self_signup' })).toBe(0);
+    expect(await SessionModel.countDocuments()).toBe(0);
+
+    const retry = await request(app).post('/api/v1/auth/session').set('Authorization', 'Bearer uid:atomic-new:new.atomic@example.com');
+    expect(retry.status).toBe(201);
+    expect(await UserModel.countDocuments({ email: 'new.atomic@example.com', firebaseUid: 'atomic-new' })).toBe(1);
+    expect(await AuditLogModel.countDocuments({ action: 'auth.self_signup' })).toBe(1);
+  });
+
+  it('links a pre-provisioned account only after the required OTP succeeds [FR-01, FR-02, SEC-03]', async () => {
     const res = await request(app).post('/api/v1/auth/session').set('Authorization', 'Bearer uid:real-admin-uid:admin@dev.local:mfa');
-    expect(res.status).toBe(401); // administrators always need the OTP step (SEC-03) — identity is linked regardless
+    expect(res.status).toBe(401); // administrators always need the OTP step (SEC-03)
     expect(res.body.error.code).toBe('OTP_REQUIRED');
-    const users = await UserModel.find({ email: 'admin@dev.local' });
+    let users = await UserModel.find({ email: 'admin@dev.local' });
+    expect(users).toHaveLength(1);
+    expect(users[0]!.firebaseUid).toBe('dev:admin@dev.local');
+
+    const requested = await request(app).post('/api/v1/auth/otp/request').set('Authorization', 'Bearer uid:real-admin-uid:admin@dev.local:mfa');
+    const login = await request(app)
+      .post('/api/v1/auth/session')
+      .set('Authorization', 'Bearer uid:real-admin-uid:admin@dev.local:mfa')
+      .send({ otpCode: requested.body.data.devCode });
+    expect(login.status).toBe(201);
+    users = await UserModel.find({ email: 'admin@dev.local' });
     expect(users).toHaveLength(1);
     expect(users[0]!.firebaseUid).toBe('real-admin-uid');
+    expect(await AuditLogModel.countDocuments({ action: 'auth.identity_linked', 'entity.id': String(users[0]!._id) })).toBe(1);
+  });
+
+  it('rolls back identity linking when its audit fails, then links and creates a session on retry [FR-01, FR-02, SEC-02, SEC-07]', async () => {
+    const before = (await UserModel.findOne({ email: 'requestor@dev.local' }).lean())!;
+    const writeAudit = audit.write.bind(audit);
+    const writeSpy = vi.spyOn(audit, 'write').mockImplementation(async (entry) => {
+      if (entry.action === 'auth.identity_linked') throw new Error('forced identity-link audit failure');
+      return writeAudit(entry);
+    });
+    const failed = await request(app)
+      .post('/api/v1/auth/session')
+      .set('Authorization', 'Bearer uid:real-requestor-uid:requestor@dev.local');
+    writeSpy.mockRestore();
+
+    expect(failed.status).toBe(500);
+    expect((await UserModel.findById(before._id).lean())?.firebaseUid).toBe('dev:requestor@dev.local');
+    expect(await SessionModel.countDocuments({ userId: before._id })).toBe(0);
+    expect(await AuditLogModel.countDocuments({ action: 'auth.identity_linked', 'entity.id': String(before._id) })).toBe(0);
+
+    const retry = await request(app)
+      .post('/api/v1/auth/session')
+      .set('Authorization', 'Bearer uid:real-requestor-uid:requestor@dev.local');
+    expect(retry.status).toBe(201);
+    expect((await UserModel.findById(before._id).lean())?.firebaseUid).toBe('real-requestor-uid');
+    expect(await SessionModel.countDocuments({ userId: before._id, terminatedAt: null })).toBe(1);
+    expect(await AuditLogModel.countDocuments({ action: 'auth.identity_linked', 'entity.id': String(before._id) })).toBe(1);
   });
 
   it('second login reuses the same user and does not create another audit self_signup', async () => {

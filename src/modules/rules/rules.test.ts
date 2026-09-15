@@ -1,9 +1,11 @@
 import request from 'supertest';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { app, login, seeded } from '../../tests/helpers';
 import { AuditLogModel } from '../audit/model';
+import { audit } from '../audit/service';
 import { matches, parseLeaf } from '../shared/conditions';
 import { evaluate } from './engine';
+import { RuleModel } from './model';
 
 describe('conditions (shared engine)', () => {
   it('normalizes yes/no/true/false and numeric strings before comparing', () => {
@@ -68,6 +70,10 @@ describe('rules change control (FR-16, AI-05)', () => {
     admin2 = await login('admin2@dev.local');
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('create → self-approve blocked → approve by other → activate; activation without approval refused', async () => {
     const created = await request(app).post('/api/v1/rules').set(admin).send(body);
     expect(created.status).toBe(201);
@@ -85,13 +91,97 @@ describe('rules change control (FR-16, AI-05)', () => {
     expect(await AuditLogModel.countDocuments({ action: { $in: ['rule.created', 'rule.approved', 'rule.activated'] } })).toBe(3);
   });
 
-  it('editing an approved/active rule sends it back to draft', async () => {
+  it('an active-rule edit creates a separate draft, keeps v1 effective, and its editor cannot approve it [AI-05]', async () => {
     const created = await request(app).post('/api/v1/rules').set(admin).send(body);
     const id = created.body.data._id;
-    await request(app).post(`/api/v1/rules/${id}/approve`).set(admin2);
-    const edit = await request(app).patch(`/api/v1/rules/${id}`).set(admin).send({ priority: 5 });
-    expect(edit.body.data).toMatchObject({ status: 'draft', priority: 5 });
+    await request(app).post(`/api/v1/rules/${id}/approve`).set(admin2).send({ changeRef: 'RULE-V1' });
+    await request(app).post(`/api/v1/rules/${id}/activate`).set(admin);
+
+    const edit = await request(app).patch(`/api/v1/rules/${id}`).set(admin2).send({ priority: 5 });
+    const replacementId = edit.body.data._id;
+    expect(replacementId).not.toBe(id);
+    expect(edit.body.data).toMatchObject({ version: 2, status: 'draft', isCurrent: false, priority: 5 });
     expect(edit.body.data.approvedBy).toBeUndefined();
+
+    const stillEffective = await RuleModel.findById(id).lean();
+    expect(stillEffective).toMatchObject({ version: 1, status: 'active', isCurrent: true, priority: 10 });
+    const latestEdit = await request(app).patch(`/api/v1/rules/${replacementId}`).set(admin).send({ forcedAction: 'Escalate immediately' });
+    expect(latestEdit.body.data).toMatchObject({ _id: replacementId, version: 2, status: 'draft', forcedAction: 'Escalate immediately' });
+    const missingRef = await request(app).post(`/api/v1/rules/${replacementId}/approve`).set(admin2).send({});
+    expect(missingRef.status).toBe(400);
+    const self = await request(app).post(`/api/v1/rules/${replacementId}/approve`).set(admin).send({ changeRef: 'RULE-V2' });
+    expect(self.status).toBe(422);
+    expect(self.body.error.code).toBe('SELF_APPROVAL');
+
+    const checked = await request(app).post(`/api/v1/rules/${replacementId}/approve`).set(admin2).send({ changeRef: 'RULE-V2' });
+    expect(checked.status).toBe(200);
+    expect((await RuleModel.findById(id).lean())?.status).toBe('active');
+    await request(app).post(`/api/v1/rules/${replacementId}/activate`).set(admin);
+    expect(await RuleModel.findById(id).lean()).toMatchObject({ status: 'retired', isCurrent: false });
+    expect(await RuleModel.findById(replacementId).lean()).toMatchObject({ status: 'active', isCurrent: true });
+    const history = await request(app).get(`/api/v1/rules/${replacementId}/history`).set(admin);
+    expect(history.status).toBe(200);
+    expect(history.body.data.map((version: { version: number }) => version.version)).toEqual([2, 1]);
+  });
+
+  it('does not activate a legacy rule whose approval record has no change reference [AI-05]', async () => {
+    const created = await request(app).post('/api/v1/rules').set(admin).send(body);
+    await request(app).post(`/api/v1/rules/${created.body.data._id}/approve`).set(admin2).send({ changeRef: 'LEGACY-1' });
+    await RuleModel.updateOne({ _id: created.body.data._id }, { $unset: { changeRef: 1 } });
+
+    const activation = await request(app).post(`/api/v1/rules/${created.body.data._id}/activate`).set(admin);
+
+    expect(activation.status).toBe(422);
+    expect(activation.body.error.code).toBe('NOT_APPROVED');
+  });
+
+  it('rolls back the current-version swap when the activation audit fails, then retries cleanly [AI-04, AI-05, SEC-07]', async () => {
+    const created = await request(app).post('/api/v1/rules').set(admin).send(body);
+    const originalId = created.body.data._id;
+    await request(app).post(`/api/v1/rules/${originalId}/approve`).set(admin2).send({ changeRef: 'RULE-V1' });
+    await request(app).post(`/api/v1/rules/${originalId}/activate`).set(admin);
+    const edit = await request(app).patch(`/api/v1/rules/${originalId}`).set(admin).send({ priority: 5 });
+    const replacementId = edit.body.data._id;
+    await request(app).post(`/api/v1/rules/${replacementId}/approve`).set(admin2).send({ changeRef: 'RULE-V2' });
+
+    const writeAudit = audit.write.bind(audit);
+    const writeSpy = vi.spyOn(audit, 'write').mockImplementation(async (entry) => {
+      if (entry.action === 'rule.activated' && entry.entity.id === replacementId) throw new Error('forced rule activation audit failure');
+      return writeAudit(entry);
+    });
+    const failed = await request(app).post(`/api/v1/rules/${replacementId}/activate`).set(admin);
+    expect(failed.status).toBe(500);
+    expect(await RuleModel.findById(originalId).lean()).toMatchObject({ status: 'active', isCurrent: true });
+    expect(await RuleModel.findById(replacementId).lean()).toMatchObject({ status: 'approved', isCurrent: false });
+    expect(await AuditLogModel.countDocuments({ action: 'rule.activated', 'entity.id': replacementId })).toBe(0);
+
+    writeSpy.mockRestore();
+    const retry = await request(app).post(`/api/v1/rules/${replacementId}/activate`).set(admin);
+    expect(retry.status).toBe(200);
+    expect(await RuleModel.findById(originalId).lean()).toMatchObject({ status: 'retired', isCurrent: false });
+    expect(await RuleModel.findById(replacementId).lean()).toMatchObject({ status: 'active', isCurrent: true });
+    expect(await AuditLogModel.countDocuments({ action: 'rule.activated', 'entity.id': replacementId })).toBe(1);
+  });
+
+  it('reconciles legacy active rules that are ineffective or missing their activation audit [AI-05, SEC-07]', async () => {
+    const ineffective = await request(app).post('/api/v1/rules').set(admin).send(body);
+    const ineffectiveId = ineffective.body.data._id;
+    await request(app).post(`/api/v1/rules/${ineffectiveId}/approve`).set(admin2).send({ changeRef: 'LEGACY-INACTIVE' });
+    await RuleModel.updateOne(
+      { tenantId: ineffective.body.data.tenantId, _id: ineffectiveId },
+      { $set: { status: 'active', isCurrent: false, activatedAt: new Date() } },
+    );
+
+    const repaired = await request(app).post(`/api/v1/rules/${ineffectiveId}/activate`).set(admin);
+    expect(repaired.status).toBe(200);
+    expect(await RuleModel.findById(ineffectiveId).lean()).toMatchObject({ status: 'active', isCurrent: true });
+    expect(await AuditLogModel.countDocuments({ action: 'rule.activated', 'entity.id': ineffectiveId })).toBe(1);
+
+    await AuditLogModel.collection.deleteOne({ action: 'rule.activated', 'entity.id': ineffectiveId });
+    expect(await AuditLogModel.countDocuments({ action: 'rule.activated', 'entity.id': ineffectiveId })).toBe(0);
+    const auditRepaired = await request(app).post(`/api/v1/rules/${ineffectiveId}/activate`).set(admin);
+    expect(auditRepaired.status).toBe(200);
+    expect(await AuditLogModel.countDocuments({ action: 'rule.activated', 'entity.id': ineffectiveId })).toBe(1);
   });
 
   it('rejects an invalid condition and a bad classification', async () => {

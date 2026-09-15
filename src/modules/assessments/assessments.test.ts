@@ -5,6 +5,7 @@ import request from 'supertest';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { app, login, seeded } from '../../tests/helpers';
 import { AuditLogModel } from '../audit/model';
+import { ScenarioModel } from '../scenarios/model';
 import { AssessmentModel } from './model';
 
 /**
@@ -65,10 +66,12 @@ describe('assessments — intake → submit → decision', () => {
     expect(res.body.data.phase).toBe('describe'); // persona chosen, no description yet → ask for one
     const id = res.body.data._id;
     const turn = await post(`/api/v1/assessments/${id}/messages`, requestor, { text: 'A vendor wire of 250000 was sent without dual authorization and the transfer was not approved.' });
-    expect(turn.status).toBe(200);
+    expect(turn.status, JSON.stringify(turn.body)).toBe(200);
     expect(turn.body.data.scenarioKey).toBe('fin_unauthorized_transaction');
     expect(turn.body.data.nextQuestion.key).toBe('fin_q01_process');
     expect(turn.body.data.versions.scenario.version).toBe(1);
+    const pinnedScenario = await ScenarioModel.findById(turn.body.data.versions.scenario.id).lean();
+    expect(turn.body.data.versions.questionSetHash).toBe(pinnedScenario!.questionSetHash);
     expect(turn.body.data.versions.promptVersion).toBe('v1');
     expect(turn.body.data.result).toBeNull(); // FR-08: nothing scored yet
   });
@@ -78,6 +81,15 @@ describe('assessments — intake → submit → decision', () => {
     expect(res.status).toBe(201);
     expect(res.body.data.personaKey).toBe('healthcare_compliance_officer');
     expect(res.body.data.personaSource).toBe('ai');
+    expect(res.body.data.phase).toBe('persona');
+    expect(res.body.data.personaCandidates).toHaveLength(3);
+    expect(res.body.data.scenarioKey).toBeUndefined();
+
+    const overridden = await post(`/api/v1/assessments/${res.body.data._id}/persona`, requestor, { personaKey: 'it_support' });
+    expect(overridden.status).toBe(200);
+    expect(overridden.body.data.personaKey).toBe('it_support');
+    expect(overridden.body.data.personaSource).toBe('user');
+    expect(overridden.body.data.scenarioKey).toBeDefined();
 
     const unsure = await post('/api/v1/assessments', requestor, { text: 'Something happened yesterday and I am not sure what to do about it' });
     expect(unsure.body.data.personaKey).toBeUndefined();
@@ -209,5 +221,28 @@ describe('assessments — intake → submit → decision', () => {
     const auditor = await login('audit@dev.local');
     const ok = await request(app).get(`/api/v1/assessments/${res.body.data._id}`).set(auditor);
     expect(ok.status).toBe(200);
+  });
+
+  it('same-department review access cannot mutate another requestor intake [SEC-01, DASH-04]', async () => {
+    const owner = await login('requestor@paid.local');
+    const colleague = await login('colleague@paid.local');
+    const started = await post('/api/v1/assessments', owner, { personaKey: 'finance_officer' });
+    expect(started.status).toBe(201);
+    const id = started.body.data._id as string;
+
+    // PAID review scope still grants the Finance colleague read access.
+    expect((await request(app).get(`/api/v1/assessments/${id}`).set(colleague)).status).toBe(200);
+
+    const denied = await Promise.all([
+      post(`/api/v1/assessments/${id}/persona`, colleague, { personaKey: 'it_support' }),
+      post(`/api/v1/assessments/${id}/messages`, colleague, { text: 'I should not be able to describe someone else’s incident.' }),
+      post(`/api/v1/assessments/${id}/submit`, colleague),
+    ]);
+    expect(denied.map((r) => r.status)).toEqual([403, 403, 403]);
+    expect(denied.map((r) => r.body.error.code)).toEqual(['FORBIDDEN', 'FORBIDDEN', 'FORBIDDEN']);
+
+    const stored = await AssessmentModel.findById(id).lean();
+    expect(stored).toMatchObject({ personaKey: 'finance_officer', phase: 'describe', status: 'in_progress' });
+    expect(stored!.openingText).toBeUndefined();
   });
 });

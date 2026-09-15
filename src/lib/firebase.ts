@@ -34,9 +34,13 @@ export async function verifyIdToken(idToken: string): Promise<VerifiedToken> {
   const a = await getApp();
   try {
     const decoded = await getAuth(a).verifyIdToken(idToken, true);
+    if (!decoded.email || decoded.email_verified !== true) {
+      throw new AppError('UNAUTHENTICATED', 'A verified email address is required');
+    }
     const fb = decoded.firebase as { sign_in_second_factor?: string; sign_in_provider?: string } | undefined;
     return { uid: decoded.uid, email: decoded.email, name: decoded.name as string | undefined, mfa: Boolean(fb?.sign_in_second_factor), signInProvider: fb?.sign_in_provider };
-  } catch {
+  } catch (error) {
+    if (error instanceof AppError) throw error;
     throw new AppError('UNAUTHENTICATED', 'Invalid or expired ID token');
   }
 }

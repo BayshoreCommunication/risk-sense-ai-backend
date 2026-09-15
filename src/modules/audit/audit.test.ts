@@ -5,6 +5,9 @@ import { app, login, seeded } from '../../tests/helpers';
 import { GENESIS_HASH } from '../../lib/hash';
 import { AuditLogModel } from './model';
 import { audit } from './service';
+import { AuditArchiveManifestModel } from './archive.model';
+import { TenantModel } from '../tenants/model';
+import { UserModel } from '../users/model';
 
 describe('audit hash chain', () => {
   let tenantId: string;
@@ -61,5 +64,49 @@ describe('audit hash chain', () => {
     const verify = await request(app).get('/api/v1/audit-logs/verify').set(sysadmin);
     expect(verify.status).toBe(200);
     expect(verify.body.data.ok).toBe(true);
+  });
+
+  it('masks sensitive payloads by default and audits explicit unmask without altering the chain [SEC-05, SEC-07]', async () => {
+    const secret = 'Patient Jane Doe has account 4471';
+    await audit.write({
+      tenantId,
+      category: 'assessment',
+      action: 'assessment.answered',
+      actor: null,
+      entity: { type: 'assessment', id: 'sensitive-case' },
+      payload: { user: { name: 'Jane Doe', email: 'jane@example.com' }, answer: 4471, facts: [{ key: 'patient', value: secret, evidence: secret }], explanation: secret },
+    });
+    const auditor = await login('audit@dev.local');
+    const masked = await request(app).get('/api/v1/audit-logs').set(auditor).query({ entityId: 'sensitive-case' });
+    expect(masked.status).toBe(200);
+    expect(masked.body.data.items[0].payloadMasked).toBe(true);
+    expect(JSON.stringify(masked.body.data.items[0].payload)).not.toContain('Jane Doe');
+    expect(masked.body.data.items[0].payload.answer).toBe('•••');
+    expect(masked.body.data.items[0].payload.user).toEqual({ name: 'J••• (8 chars)', email: 'j•••@example.com' });
+
+    const clear = await request(app).get('/api/v1/audit-logs').set(auditor).query({ entityId: 'sensitive-case', unmask: 'true' });
+    expect(clear.status).toBe(200);
+    expect(clear.body.data.items[0].payload.facts[0].value).toBe(secret);
+    expect(await AuditLogModel.countDocuments({ action: 'access.unmasked', 'payload.what': 'audit payloads' })).toBe(1);
+    expect((await audit.verify(tenantId)).ok).toBe(true);
+  });
+
+  it('exports a bounded paid audit range and records an immutable manifest [SEC-06, SEC-07]', async () => {
+    const acme = (await TenantModel.findOne({ slug: 'acme' }))!;
+    await UserModel.updateOne({ email: 'sysadmin@dev.local' }, { $set: { tenantId: acme._id } });
+    await audit.write({ tenantId: String(acme._id), category: 'assessment', action: 'assessment.started', actor: null, entity: { type: 'assessment', id: 'archive-me' }, payload: { openingText: 'authorized cold-storage export' } });
+    const sysadmin = await login('sysadmin@dev.local');
+    const from = new Date(Date.now() - 60_000).toISOString();
+    const to = new Date(Date.now() + 60_000).toISOString();
+    const exported = await request(app).post('/api/v1/audit-logs/archive').set(sysadmin).send({ from, to });
+    expect(exported.status).toBe(201);
+    expect(exported.body.data.manifest).toMatchObject({ firstSeq: 1, lastSeq: 2, recordCount: 2 });
+    expect(exported.body.data.manifest.exportHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(exported.body.data.records).toHaveLength(2);
+    const manifest = await AuditArchiveManifestModel.findById(exported.body.data.manifest._id);
+    await expect(AuditArchiveManifestModel.updateOne({ _id: manifest!._id }, { $set: { recordCount: 0 } })).rejects.toThrow(/immutable/);
+    expect((await audit.verify(String(acme._id))).ok).toBe(true);
+    const listed = await request(app).get('/api/v1/audit-logs/archive-manifests').set(sysadmin);
+    expect(listed.body.data).toHaveLength(1);
   });
 });

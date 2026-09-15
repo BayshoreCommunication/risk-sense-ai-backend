@@ -1,4 +1,5 @@
 import { Types } from 'mongoose';
+import { withMongoTransaction } from '../../lib/db';
 import { AppError, notFound } from '../../lib/errors';
 import type { AuthUser } from '../../middleware/auth';
 import { audit } from '../audit/service';
@@ -151,82 +152,108 @@ export const datasetsService = {
     return doc;
   },
 
-  /**
-   * Applies the reviewed content: personas → questions → scenarios, each through the normal services
-   * (so versioning, activation validation and audit all apply). Existing keys get a new version (FR-11);
-   * new keys are created and activated. Questions are upserted in place (FR-15).
-   */
+  /** Applies all reviewed content and its audit trail in one MongoDB transaction (FR-13). */
   async activate(tenantId: string, id: string, actor: AuthUser) {
     const doc = await load(tenantId, id);
     if (doc.status !== 'approved') throw new AppError('NOT_APPROVED', `dataset is ${doc.status}; approve it first (AI-06)`);
-    const content = doc.content as ParsedContent;
-    const applied = { personas: [] as string[], scenarios: [] as string[], questions: [] as string[], rules: [] as string[], matrix: undefined as string | undefined };
     try {
-      for (const p of content.personas) {
-        const current = await PersonaModel.findOne({ tenantId, key: p.body.key, isCurrent: true }).lean();
-        const target = current ? await personasService.update(tenantId, String(current._id), p.body, actor) : await personasService.create(tenantId, p.body, actor);
-        await personasService.activate(tenantId, String(target._id), actor);
-        applied.personas.push(p.body.key);
-      }
-      for (const q of content.questions) {
-        const existing = await QuestionModel.findOne({ tenantId, key: q.body.key }).lean();
-        if (existing) {
-          if (existing.status === 'retired') await QuestionModel.updateOne({ _id: existing._id }, { $set: { status: 'active', retiredAt: null } });
-          const { key: _k, ...patch } = q.body;
-          await questionsService.update(tenantId, String(existing._id), patch, actor);
-        } else {
-          await questionsService.create(tenantId, q.body, actor);
+      return await withMongoTransaction(async () => {
+        // Re-read under the transaction snapshot so a concurrent activation cannot apply the same dataset twice.
+        const txDoc = await load(tenantId, id);
+        if (txDoc.status !== 'approved') throw new AppError('NOT_APPROVED', `dataset is ${txDoc.status}; approve it first (AI-06)`);
+        const content = txDoc.content as ParsedContent;
+        const applied = emptyApplied();
+
+        for (const p of content.personas) {
+          const current = await PersonaModel.findOne({ tenantId, key: p.body.key, isCurrent: true }).lean();
+          const target = current ? await personasService.update(tenantId, String(current._id), p.body, actor) : await personasService.create(tenantId, p.body, actor);
+          await personasService.activate(tenantId, String(target._id), actor);
+          applied.personas.push(p.body.key);
         }
-        applied.questions.push(q.body.key);
-      }
-      for (const s of content.scenarios) {
-        const current = await ScenarioModel.findOne({ tenantId, key: s.body.key, isCurrent: true }).lean();
-        const { key: _k, ...patch } = s.body;
-        const target = current ? await scenariosService.update(tenantId, String(current._id), patch, actor) : await scenariosService.create(tenantId, s.body, actor);
-        await scenariosService.activate(tenantId, String(target._id), actor);
-        applied.scenarios.push(s.body.key);
-      }
-      // Scoring sheet → matrix + hard rules. The dataset reviewer is the approval record (AI-05, AI-06).
-      if (content.scoring.length && doc.reviewerId) {
-        const reviewer: AuthUser = { ...actor, id: String(doc.reviewerId), role: 'administrator' };
-        const rows = content.scoring.map((r) => r.raw);
-        const parsedMatrix = scoringService.parseSheet(rows);
-        if (parsedMatrix.body) {
-          const currentMatrix = await ScoringMatrixModel.findOne({ tenantId, key: parsedMatrix.body.key, isCurrent: true }).lean();
-          const { key: _mk, ...mpatch } = parsedMatrix.body;
-          const target = currentMatrix
-            ? await scoringService.update(tenantId, String(currentMatrix._id), mpatch, actor)
-            : await scoringService.create(tenantId, parsedMatrix.body, actor);
-          await scoringService.approve(tenantId, String(target._id), reviewer, `dataset #${doc.seq}`);
-          await scoringService.activate(tenantId, String(target._id), actor);
-          applied.matrix = `${parsedMatrix.body.key} v${target.version}`;
+        for (const q of content.questions) {
+          const existing = await QuestionModel.findOne({ tenantId, key: q.body.key }).lean();
+          if (existing) {
+            if (existing.status === 'retired') await QuestionModel.updateOne({ _id: existing._id }, { $set: { status: 'active', retiredAt: null } });
+            const { key: _k, ...patch } = q.body;
+            await questionsService.update(tenantId, String(existing._id), patch, actor);
+          } else {
+            await questionsService.create(tenantId, q.body, actor);
+          }
+          applied.questions.push(q.body.key);
         }
-        const first = rows.find((r) => r.hard_rules?.trim());
-        if (first) {
-          for (const r of rulesService.parseSheetRules(first.hard_rules!).rules) {
-            const existing = await RuleModel.findOne({ tenantId, key: r.key }).lean();
-            const { key: _rk, ...rpatch } = r;
-            const target = existing ? await rulesService.update(tenantId, String(existing._id), rpatch, actor) : await rulesService.create(tenantId, { ...r, sectors: [] }, actor);
-            await rulesService.approve(tenantId, String(target._id), reviewer, `dataset #${doc.seq}`);
-            await rulesService.activate(tenantId, String(target._id), actor);
-            applied.rules.push(r.key);
+        for (const s of content.scenarios) {
+          const current = await ScenarioModel.findOne({ tenantId, key: s.body.key, isCurrent: true }).lean();
+          const { key: _k, ...patch } = s.body;
+          const target = current ? await scenariosService.update(tenantId, String(current._id), patch, actor) : await scenariosService.create(tenantId, s.body, actor);
+          await scenariosService.activate(tenantId, String(target._id), actor);
+          applied.scenarios.push(s.body.key);
+        }
+        // Scoring sheet → matrix + hard rules. The dataset reviewer is the approval record (AI-05, AI-06).
+        if (content.scoring.length && txDoc.reviewerId) {
+          const reviewer: AuthUser = { ...actor, id: String(txDoc.reviewerId), role: 'administrator' };
+          const rows = content.scoring.map((r) => r.raw);
+          const parsedMatrix = scoringService.parseSheet(rows);
+          if (parsedMatrix.body) {
+            const currentMatrix = await ScoringMatrixModel.findOne({ tenantId, key: parsedMatrix.body.key, isCurrent: true }).lean();
+            const { key: _mk, ...mpatch } = parsedMatrix.body;
+            const target = currentMatrix
+              ? await scoringService.update(tenantId, String(currentMatrix._id), mpatch, actor)
+              : await scoringService.create(tenantId, parsedMatrix.body, actor);
+            // The reviewed dataset author is the maker. Activation may be performed by either admin,
+            // including the reviewer, without turning that operator into the recorded content author.
+            target.createdBy = txDoc.authorId;
+            await target.save();
+            await scoringService.approve(tenantId, String(target._id), reviewer, `dataset #${txDoc.seq}`);
+            await scoringService.activate(tenantId, String(target._id), actor);
+            applied.matrix = `${parsedMatrix.body.key} v${target.version}`;
+          }
+          const first = rows.find((r) => r.hard_rules?.trim());
+          if (first) {
+            for (const r of rulesService.parseSheetRules(first.hard_rules!).rules) {
+              const open = await RuleModel.findOne({ tenantId, key: r.key, status: { $in: ['draft', 'approved'] } }).sort({ version: -1 }).lean();
+              const current = open ?? (await RuleModel.findOne({ tenantId, key: r.key, isCurrent: true, status: 'active' }).lean());
+              const { key: _rk, ...rpatch } = r;
+              const target = current ? await rulesService.update(tenantId, String(current._id), rpatch, actor) : await rulesService.create(tenantId, { ...r, sectors: [] }, actor);
+              target.createdBy = txDoc.authorId;
+              await target.save();
+              await rulesService.approve(tenantId, String(target._id), reviewer, `dataset #${txDoc.seq}`);
+              await rulesService.activate(tenantId, String(target._id), actor);
+              applied.rules.push(r.key);
+            }
           }
         }
-      }
+
+        txDoc.status = 'active';
+        txDoc.activatedBy = new Types.ObjectId(actor.id);
+        txDoc.activatedAt = new Date();
+        txDoc.applied = applied;
+        await txDoc.save();
+        await audit.write({ tenantId, category: 'dataset', action: 'dataset.activated', actor, entity: { type: 'dataset', id, version: txDoc.seq }, payload: { applied } });
+        return txDoc;
+      });
     } catch (err) {
-      doc.status = 'failed';
-      doc.failure = err instanceof Error ? err.message : String(err);
-      doc.applied = applied;
-      await doc.save();
-      await audit.write({ tenantId, category: 'dataset', action: 'dataset.failed', actor, entity: { type: 'dataset', id, version: doc.seq }, payload: { failure: doc.failure, applied } });
+      const failure = err instanceof Error ? err.message : String(err);
+      const applied = emptyApplied();
+      // The content transaction has rolled back. Persist only the deterministic failure outcome afterward.
+      const failed = await DatasetModel.findOneAndUpdate(
+        { _id: id, tenantId, status: 'approved' },
+        { $set: { status: 'failed', failure, applied } },
+        { new: true },
+      );
+      if (failed) {
+        await audit.write({ tenantId, category: 'dataset', action: 'dataset.failed', actor, entity: { type: 'dataset', id, version: failed.seq }, payload: { failure, applied } });
+      }
       throw err;
     }
-    doc.status = 'active';
-    doc.activatedBy = new Types.ObjectId(actor.id);
-    doc.activatedAt = new Date();
-    doc.applied = applied;
-    await doc.save();
-    await audit.write({ tenantId, category: 'dataset', action: 'dataset.activated', actor, entity: { type: 'dataset', id, version: doc.seq }, payload: { applied } });
-    return doc;
   },
 };
+
+function emptyApplied() {
+  return {
+    personas: [] as string[],
+    scenarios: [] as string[],
+    questions: [] as string[],
+    rules: [] as string[],
+    matrix: undefined as string | undefined,
+  };
+}

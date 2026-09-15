@@ -10,6 +10,8 @@ const sessionSchema = new Schema(
   {
     sessionId: { type: String, required: true, unique: true },
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    // A bounded active slot makes the concurrent-session limit race-safe across API instances.
+    slot: { type: Number, min: 0 },
     tenantId: { type: Schema.Types.ObjectId, ref: 'Tenant', required: true },
     lastSeenAt: { type: Date, required: true },
     expiresAt: { type: Date, required: true }, // lastSeenAt + idleTimeout; TTL index cleans up stale docs
@@ -21,6 +23,10 @@ const sessionSchema = new Schema(
   { timestamps: true, collection: 'sessions' },
 );
 sessionSchema.index({ userId: 1, terminatedAt: 1 });
+sessionSchema.index(
+  { userId: 1, slot: 1 },
+  { unique: true, partialFilterExpression: { slot: { $type: 'number' }, terminatedAt: { $exists: false } } },
+);
 sessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 }); // keep a day for audit joins
 
 export type Session = InferSchemaType<typeof sessionSchema>;
