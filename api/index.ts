@@ -10,11 +10,17 @@
  * `connectDb()` returns immediately when Mongoose is already connected.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import mongoose from 'mongoose';
 import { createApp } from '../src/app';
 import { connectDb } from '../src/lib/db';
 import { logger } from '../src/lib/logger';
 
 const app = createApp();
+
+// Mongoose keeps retrying in the background after a failed connection and emits 'error' on the connection.
+// With no listener that surfaces as an unhandled error and the platform reports FUNCTION_INVOCATION_FAILED
+// even though this handler already answered 503. Log it and let the per-request path own the response.
+mongoose.connection.on('error', (err) => logger.error({ err }, 'mongo connection error'));
 
 // One in-flight connection attempt per instance; a failure clears the cache so the next request retries
 // instead of inheriting a rejected promise for the life of the instance.
