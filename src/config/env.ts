@@ -5,7 +5,7 @@ import { z } from 'zod';
  * Environment is validated once at boot. A missing/invalid value fails fast with a readable
  * message instead of a confusing runtime error later (see DevelopmentGuide.md).
  */
-const schema = z
+export const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     PORT: z.coerce.number().int().positive().default(4000),
@@ -49,7 +49,7 @@ const schema = z
       if (v.AUTH_DEV_BYPASS) {
         ctx.addIssue({ code: 'custom', path: ['AUTH_DEV_BYPASS'], message: 'must be false in production' });
       }
-      if (!v.FIREBASE_SERVICE_ACCOUNT_B64) {
+      if (!v.FIREBASE_SERVICE_ACCOUNT_B64?.trim()) {
         ctx.addIssue({ code: 'custom', path: ['FIREBASE_SERVICE_ACCOUNT_B64'], message: 'required in production' });
       }
       if (v.RATE_LIMIT_DISABLED) {
@@ -58,12 +58,39 @@ const schema = z
       if (v.MAIL_PROVIDER === 'console') {
         ctx.addIssue({ code: 'custom', path: ['MAIL_PROVIDER'], message: 'must be resend or smtp in production (OTP emails)' });
       }
+      if (v.AI_PROVIDER === 'mock') {
+        ctx.addIssue({ code: 'custom', path: ['AI_PROVIDER'], message: 'mock AI is forbidden in production' });
+      }
+      if (!v.OPENAI_API_KEY?.trim()) {
+        ctx.addIssue({ code: 'custom', path: ['OPENAI_API_KEY'], message: 'required in production' });
+      }
+      if (!/^mongodb(?:\+srv)?:\/\//i.test(v.MONGODB_URI) || /^mongodb:\/\/(127\.0\.0\.1|localhost)(?::|\/)/i.test(v.MONGODB_URI)) {
+        ctx.addIssue({ code: 'custom', path: ['MONGODB_URI'], message: 'a valid non-local MongoDB production URI is required' });
+      }
+      if (v.MAIL_PROVIDER === 'resend' && !v.RESEND_API_KEY?.trim()) {
+        ctx.addIssue({ code: 'custom', path: ['RESEND_API_KEY'], message: 'required when MAIL_PROVIDER=resend in production' });
+      }
+      if (v.MAIL_PROVIDER === 'smtp' && !v.SMTP_URL?.trim()) {
+        ctx.addIssue({ code: 'custom', path: ['SMTP_URL'], message: 'required when MAIL_PROVIDER=smtp in production' });
+      }
+      const origins = v.CORS_ORIGINS.split(',').map((origin) => origin.trim()).filter(Boolean);
+      const hasInvalidOrigin = origins.some((origin) => {
+        try {
+          const url = new URL(origin);
+          return url.protocol !== 'https:' || url.origin !== origin || Boolean(url.username || url.password);
+        } catch {
+          return true;
+        }
+      });
+      if (origins.length === 0 || hasInvalidOrigin) {
+        ctx.addIssue({ code: 'custom', path: ['CORS_ORIGINS'], message: 'production origins must be an explicit comma-separated HTTPS allowlist' });
+      }
     }
   });
 
-export type Env = z.infer<typeof schema>;
+export type Env = z.infer<typeof envSchema>;
 
-export const env: Env = schema.parse(process.env);
+export const env: Env = envSchema.parse(process.env);
 
 export const isProd = env.NODE_ENV === 'production';
 export const isTest = env.NODE_ENV === 'test';

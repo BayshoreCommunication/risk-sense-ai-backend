@@ -2,7 +2,7 @@
   "name": "risk-sense-ai-backend",
   "version": "0.1.0",
   "private": true,
-  "description": "RiskSense AI \u2014 Express + TypeScript + Mongoose API",
+  "description": "RiskSense AI — Express + TypeScript + Mongoose API",
   "main": "dist/server.js",
   "engines": {
     "node": ">=22"
@@ -24,6 +24,10 @@
     "retention": "tsx src/scripts/retention.ts",
     "load:smoke": "tsx src/scripts/load-smoke.ts",
     "accuracy": "tsx src/scripts/accuracy-baseline.ts",
+    "schema:scan": "tsx src/scripts/schema-scan.ts",
+    "rules:migrate-versions": "tsx src/scripts/migrate-rule-versions.ts",
+    "content:verify": "tsx src/scripts/verify-content.ts",
+    "test:ai-live": "tsx src/scripts/ai-live.ts",
     "user:create": "tsx src/scripts/create-user.ts"
   },
   "dependencies": {
@@ -35,7 +39,7 @@
     "exceljs": "^4.4.0",
     "express": "^5.1.0",
     "express-rate-limit": "^7.5.0",
-    "firebase-admin": "^13.0.2",
+    "firebase-admin": "^14.4.0",
     "helmet": "^8.0.0",
     "mongoose": "^8.9.5",
     "multer": "^2.3.0",
@@ -61,6 +65,10 @@
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.20.0",
-    "vitest": "^2.1.8"
+    "vite": "^8.3.0",
+    "vitest": "^5.0.0"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
   }
 }

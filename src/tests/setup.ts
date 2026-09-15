@@ -1,5 +1,5 @@
 /**
- * Test bootstrap: one in-memory mongod for the whole run, fresh database per test file.
+ * Test bootstrap: one in-memory single-node replica set for the whole run, fresh database per test file.
  * Uses the Homebrew mongod binary when present so nothing is downloaded on this Mac.
  */
 import { existsSync } from 'node:fs';
@@ -14,13 +14,16 @@ for (const bin of ['/opt/homebrew/bin/mongod', '/usr/local/bin/mongod']) {
   if (!process.env.MONGOMS_SYSTEM_BINARY && existsSync(bin)) process.env.MONGOMS_SYSTEM_BINARY = bin;
 }
 
-import { MongoMemoryServer } from 'mongodb-memory-server';
+import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
 
-let mongod: MongoMemoryServer;
+let mongod: MongoMemoryReplSet;
 
 beforeAll(async () => {
-  mongod = await MongoMemoryServer.create({ instance: { dbName: 'risksense_test' } });
+  mongod = await MongoMemoryReplSet.create({
+    instanceOpts: [{ launchTimeout: 30_000 }],
+    replSet: { count: 1, dbName: 'risksense_test', storageEngine: 'wiredTiger' },
+  });
   process.env.MONGODB_URI = mongod.getUri();
   await mongoose.connect(process.env.MONGODB_URI);
 });
