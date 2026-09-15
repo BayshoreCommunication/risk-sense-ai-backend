@@ -98,6 +98,7 @@ describe('assessments list — review dashboard [DASH-01, DASH-04, FR-21]', () =
     const closed = await list(h, { status: 'closed' });
     expect(closed.body.data.total).toBe(20);
     expect(closed.body.data.summary).toEqual(all.body.data.summary); // summary deliberately ignores the status dimension
+    expect((await list(h, { limit: 10, page: 2 })).body.data.summary).toEqual(all.body.data.summary); // never average one page
     const pending = await list(h, { pending: 'true', limit: 200 });
     expect(pending.body.data.total).toBe(60);
     expect(new Set(pending.body.data.items.map((r: { status: string }) => r.status))).toEqual(new Set(['awaiting_decision', 'escalated', 'error_review']));

@@ -466,6 +466,20 @@
           "all"
         ]
       },
+      "AssessmentSummary": {
+        "type": "object",
+        "properties": {
+          "averageConfidence": {
+            "type": "number",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "averageConfidence"
+        ]
+      },
       "Department": {
         "type": "object",
         "properties": {
@@ -22583,7 +22597,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Review dashboard (DASH-01): scoped, filtered, paginated; counts per status within the non-status filters",
+            "description": "Review dashboard (DASH-01): scoped, filtered, paginated; counts and average confidence within the non-status filters",
             "content": {
               "application/json": {
                 "schema": {
@@ -22612,6 +22626,9 @@
                         },
                         "counts": {
                           "$ref": "#/components/schemas/AssessmentCounts"
+                        },
+                        "summary": {
+                          "$ref": "#/components/schemas/AssessmentSummary"
                         }
                       },
                       "required": [
@@ -22620,7 +22637,8 @@
                         "page",
                         "limit",
                         "pages",
-                        "counts"
+                        "counts",
+                        "summary"
                       ]
                     },
                     "meta": {

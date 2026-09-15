@@ -607,10 +607,14 @@ export const assessmentsService = {
         },
       },
     ];
-    const [items, total, grouped] = await Promise.all([
+    const [items, total, grouped, confidenceSummary] = await Promise.all([
       AssessmentModel.aggregate(pipeline),
       AssessmentModel.countDocuments(filter),
       AssessmentModel.aggregate<{ _id: string; n: number }>([{ $match: base }, { $group: { _id: '$status', n: { $sum: 1 } } }]),
+      AssessmentModel.aggregate<{ _id: null; averageConfidence: number }>([
+        { $match: { ...base, 'result.computedAt': { $exists: true }, 'result.confidence': { $type: 'number' } } },
+        { $group: { _id: null, averageConfidence: { $avg: '$result.confidence' } } },
+      ]),
     ]);
     const byStatus = Object.fromEntries(ASSESSMENT_STATUSES.map((s) => [s, 0])) as Record<AssessmentStatus, number>;
     for (const g of grouped) byStatus[g._id as AssessmentStatus] = g.n;
@@ -630,6 +634,11 @@ export const assessmentsService = {
       limit: q.limit,
       pages: Math.max(1, Math.ceil(total / q.limit)),
       counts,
+      summary: {
+        averageConfidence: confidenceSummary[0]
+          ? Math.round(confidenceSummary[0].averageConfidence * 10) / 10
+          : null,
+      },
     };
   },
 
