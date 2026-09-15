@@ -184,15 +184,7 @@ describe('auth & sessions', () => {
   });
 
   it('rejects forged Firebase-MFA assurance for roles that require RiskSense OTP [SEC-03]', async () => {
-    const acme = await TenantModel.findOne({ slug: 'acme' });
-    await UserModel.create({
-      firebaseUid: 'dev:audit@paid.local',
-      email: 'audit@paid.local',
-      name: 'Paid Auditor',
-      role: 'audit',
-      tenantId: acme!._id,
-    });
-
+    // `audit@paid.local` is the demo tenant's seeded auditor (a PAID managed role), so no local fixture is needed.
     for (const email of ['admin@dev.local', 'sysadmin@dev.local', 'audit@paid.local']) {
       const headers = await login(email);
       const lastSeenAt = new Date(Date.now() - 60_000);

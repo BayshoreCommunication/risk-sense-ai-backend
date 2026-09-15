@@ -81,6 +81,9 @@ export async function seed() {
     { email: 'itlead@paid.local', name: 'Acme IT Lead', role: 'requestor' as Role, tenantId: acme._id, departmentIds: [it._id] },
     { email: 'colleague@paid.local', name: 'Acme Finance Colleague', role: 'requestor' as Role, tenantId: acme._id, departmentIds: [finance._id] }, // escalation target (T-061)
     { email: 'admin@paid.local', name: 'Acme Administrator', role: 'administrator' as Role, tenantId: acme._id, mfaEnrolled: true }, // sees the PAID tenant's review queue (AI-03)
+    // The demo tenant carries the assessment history, so it needs its own auditor: an auditor in a tenant with no
+    // activity cannot exercise reconstruction or chain verification (FR-26, SEC-07).
+    { email: 'audit@paid.local', name: 'Acme Auditor', role: 'audit' as Role, tenantId: acme._id, mfaEnrolled: true }
   ];
   for (const u of users) await upsertUser(u);
 
