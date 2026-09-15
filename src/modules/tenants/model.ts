@@ -27,7 +27,8 @@ const tenantSchema = new Schema(
     plan: { type: String, enum: TENANT_PLANS, required: true, default: 'free' },
     features: { type: featuresSchema, default: () => ({}) },
     sectors: { type: [String], enum: SECTORS, default: [] },
-    // FR-01: second factor (email OTP) on every Firebase login; privileged roles ignore this and always need it (SEC-03).
+    // Legacy configuration surface retained for compatibility. The plan is authoritative:
+    // FREE requestors never require MFA and every PAID account requires it (FR-02, SEC-03).
     authPolicy: {
       otpRequired: { type: Boolean, default: true },
     },

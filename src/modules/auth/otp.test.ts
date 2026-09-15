@@ -26,7 +26,7 @@ import { UserModel } from '../users/model';
 import { SessionModel } from './model';
 import { OtpCodeModel, OtpIssueLockModel } from './otp.model';
 
-const bearer = (uid: string, email: string, provider?: string) => ({ Authorization: `Bearer uid:${uid}:${email}:-:${provider ?? ''}` });
+const bearer = (uid: string, email: string, provider = 'oidc.tac') => ({ Authorization: `Bearer uid:${uid}:${email}:-:${provider}` });
 const duplicateKey = (keyPattern: Record<string, number>) => Object.assign(new Error('forced duplicate key'), { code: 11000, keyPattern });
 
 async function requestCode(h: Record<string, string>) {
@@ -40,10 +40,12 @@ describe('email OTP second factor', () => {
     sendMailMock.mockReset();
     sendMailMock.mockResolvedValue({ provider: 'console' });
     await seeded();
-    await TenantModel.updateOne({ slug: 'tac' }, { $set: { 'features.sso': true, sso: { providerId: 'oidc.tac', domain: 'tac.example' } } });
+    // OTP behavior is exercised with PAID JIT requestors on x.com. FREE requestors intentionally
+    // bypass the OTP flow regardless of the stored compatibility flag.
+    await TenantModel.updateOne({ slug: 'tac' }, { $set: { 'features.sso': true, sso: { providerId: 'oidc.tac', domain: 'x.com' } } });
   });
 
-  it('Firebase login without a code is refused with OTP_REQUIRED [FR-01]', async () => {
+  it('PAID requestor login without current MFA is refused with OTP_REQUIRED [FR-01, SEC-03]', async () => {
     const res = await request(app).post('/api/v1/auth/session').set(bearer('u1', 'one@x.com'));
     expect(res.status).toBe(401);
     expect(res.body.error.code).toBe('OTP_REQUIRED');
@@ -380,13 +382,28 @@ describe('email OTP second factor', () => {
     expect((await UserModel.findOne({ email: 'admin@dev.local' }).lean())?.firebaseUid).toBe('blocked-admin-uid');
   });
 
-  it('administrator must pass OTP even when the tenant policy disables it [SEC-03]', async () => {
-    await TenantModel.updateMany({ slug: { $in: ['public', 'tac'] } }, { $set: { 'authPolicy.otpRequired': false } });
-    const requestor = await request(app).post('/api/v1/auth/session').set(bearer('u9', 'nine@x.com'));
-    expect(requestor.status).toBe(201); // policy off → requestor may skip
-    const admin = await request(app).post('/api/v1/auth/session').set(bearer('adm', 'admin@dev.local', 'oidc.tac'));
-    expect(admin.status).toBe(401);
-    expect(admin.body.error.code).toBe('OTP_REQUIRED');
+  it('plan overrides stored OTP policy for FREE requestors and every PAID role [FR-02, SEC-03]', async () => {
+    await TenantModel.updateOne({ slug: 'public' }, { $set: { 'authPolicy.otpRequired': true } });
+    await TenantModel.updateOne({ slug: 'tac' }, { $set: { 'authPolicy.otpRequired': false } });
+
+    const freeRequestor = await request(app)
+      .post('/api/v1/auth/session')
+      .set(bearer('free-u9', 'nine@free.test', ''));
+    expect(freeRequestor.status).toBe(201);
+    expect((await SessionModel.findOne({ sessionId: freeRequestor.body.data.sessionId }).lean())?.loginAssurance.method).toBe(
+      'single_factor',
+    );
+
+    for (const [uid, email] of [
+      ['paid-requestor', 'one@x.com'],
+      ['paid-admin', 'admin@dev.local'],
+      ['paid-sysadmin', 'sysadmin@dev.local'],
+      ['paid-audit', 'audit@dev.local'],
+    ] as const) {
+      const denied = await request(app).post('/api/v1/auth/session').set(bearer(uid, email));
+      expect(denied.status, email).toBe(401);
+      expect(denied.body.error.code, email).toBe('OTP_REQUIRED');
+    }
   });
 
   it('dev bypass login does not need OTP', async () => {

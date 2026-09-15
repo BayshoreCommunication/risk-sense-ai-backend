@@ -149,7 +149,10 @@ describe('SSO via Firebase OIDC/OAuth providers [FR-03, SEC-03]', () => {
     expect(clash.status).toBe(409);
     const okRes = await request(app).patch('/api/v1/system/tenant').set(sysadmin).send({ sso: { providerId: 'saml.bayshore', domain: 'Bayshore.example' }, features: { sso: true }, sessionPolicy: { idleTimeoutMin: 20 }, authPolicy: { otpRequired: false } });
     expect(okRes.status).toBe(200);
-    expect(okRes.body.data).toMatchObject({ sso: { providerId: 'saml.bayshore', domain: 'bayshore.example' }, features: { sso: true }, sessionPolicy: { idleTimeoutMin: 20 }, authPolicy: { otpRequired: false } });
+    // Legacy clients may still send authPolicy, but PAID always reports and stores the effective
+    // required value so a settings response cannot imply that current-login MFA was disabled.
+    expect(okRes.body.data).toMatchObject({ sso: { providerId: 'saml.bayshore', domain: 'bayshore.example' }, features: { sso: true }, sessionPolicy: { idleTimeoutMin: 20 }, authPolicy: { otpRequired: true } });
+    expect((await TenantModel.findOne({ slug: 'tac' }).lean())?.authPolicy.otpRequired).toBe(true);
     const entry = await AuditLogModel.findOne({ action: 'tenant.updated' }).lean();
     expect(entry!.category).toBe('config');
     expect([...(entry!.payload as { changed: string[] }).changed].sort()).toEqual(['authPolicy', 'features', 'sessionPolicy', 'sso']);

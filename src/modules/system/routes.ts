@@ -127,7 +127,8 @@ const view = (t: HydratedDocument<Tenant>) => ({
   plan: t.plan,
   features: t.features,
   sso: { providerId: t.sso?.providerId ?? null, domain: t.sso?.domain ?? null },
-  authPolicy: { otpRequired: t.authPolicy?.otpRequired ?? true },
+  // The plan is the effective MFA policy; hide any contradictory legacy stored value.
+  authPolicy: { otpRequired: t.plan === 'paid' },
   sessionPolicy: { idleTimeoutMin: t.sessionPolicy?.idleTimeoutMin ?? 15, maxConcurrentSessions: t.sessionPolicy?.maxConcurrentSessions ?? 1 },
   retentionPolicy: t.retentionPolicy,
   updatedAt: (t as unknown as { updatedAt?: Date }).updatedAt,
@@ -163,7 +164,9 @@ systemRouter.patch('/tenant', validate({ body: TenantPatch }), async (req, res) 
     }
     t.set('sso', { providerId: body.sso.providerId ?? undefined, domain: body.sso.domain?.toLowerCase() ?? undefined });
   }
-  if (body.authPolicy) t.set('authPolicy.otpRequired', body.authPolicy.otpRequired);
+  // Keep accepting the legacy field so older clients do not break, but normalize storage to the
+  // tier invariant instead of allowing this compatibility input to weaken or strengthen it.
+  t.set('authPolicy.otpRequired', t.plan === 'paid');
   if (body.sessionPolicy) for (const [k, v] of Object.entries(body.sessionPolicy)) if (v !== undefined) t.set(`sessionPolicy.${k}`, v);
   if (body.retentionPolicy) for (const [k, v] of Object.entries(body.retentionPolicy)) if (v !== undefined) t.set(`retentionPolicy.${k}`, v);
   const wantsSso = (body.features?.sso ?? t.features.sso) === true;

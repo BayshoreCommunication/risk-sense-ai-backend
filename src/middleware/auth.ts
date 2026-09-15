@@ -118,7 +118,8 @@ export const authenticate: RequestHandler = async (req, _res, next) => {
       idleTimeoutMin: tenant.sessionPolicy?.idleTimeoutMin ?? 15,
       maxConcurrentSessions: tenant.sessionPolicy?.maxConcurrentSessions ?? 1,
     },
-    authPolicy: { otpRequired: tenant.authPolicy?.otpRequired ?? true },
+    // Expose the effective setting, not a legacy stored value that cannot override the tier.
+    authPolicy: { otpRequired: tenant.plan === 'paid' },
     sso: { providerId: tenant.sso?.providerId ?? null, domain: tenant.sso?.domain ?? null },
   };
   next();

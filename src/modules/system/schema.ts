@@ -24,6 +24,7 @@ export const TenantPatch = z
         domain: z.string().regex(/^[a-z0-9.-]+\.[a-z]{2,}$/i, 'email domain, e.g. acme.com').nullable(),
       })
       .optional(),
+    // Compatibility input for older clients. The route normalizes it to the plan-derived value.
     authPolicy: z.object({ otpRequired: z.boolean() }).optional(),
     sessionPolicy: z.object({ idleTimeoutMin: z.number().int().min(5).max(30).optional(), maxConcurrentSessions: z.number().int().min(1).max(10).optional() }).optional(),
     retentionPolicy: z

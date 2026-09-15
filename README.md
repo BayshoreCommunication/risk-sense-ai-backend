@@ -27,6 +27,13 @@ managed-role row that still points at a FREE tenant, before any application sess
 Re-run `npm run seed` to reconcile the known development identities. For another legacy account,
 use the trusted `npm run user:create -- --email ... --name ... --role requestor --tenant public`
 operator path to demote it, or move it to a PAID tenant with its approved managed role.
+The plan also controls current-login assurance: FREE requestors never require MFA, even if a legacy
+`authPolicy.otpRequired` value is `true`; every PAID account requires MFA on the current login,
+even if that stored compatibility value is `false`. PAID requestors can satisfy the requirement with
+Firebase-verified MFA through their configured IdP or the RiskSense email OTP fallback. PAID managed
+roles use the RiskSense OTP. The tenant settings endpoint accepts the legacy field for older clients
+but reports and persists its effective plan-derived value. The explicit non-production development
+bypass remains exempt.
 `npm run seed:content` publishes the reviewed starter library to both the shared FREE namespace and
 the TAC demo tenant, so the FREE requestor and PAID administrator demos remain usable without a
 managed account in the FREE tenant.

@@ -9,7 +9,6 @@ import { sessionLimiter } from '../../middleware/limits';
 import { validate } from '../../middleware/validate';
 import { TenantModel } from '../tenants/model';
 import { audit } from '../audit/service';
-import { PRIVILEGED_ROLES } from '../users/model';
 import { usersService } from '../users/service';
 import { otpService } from './otp.service';
 import { requiresCurrentLoginMfa } from './policy';
@@ -43,25 +42,23 @@ authRouter.post('/otp/request', authenticate, async (req, res) => {
 
 /**
  * POST /auth/session — exchange a verified identity (+ OTP when required) for an app session (W1).
- * OTP is required for every Firebase login when the tenant policy says so (default true, FR-01) and
- * always for administrator / system_administrator (SEC-03). The dev bypass skips it.
+ * FREE requestors never require MFA. Every PAID account requires current-login MFA; requestors may
+ * satisfy it with a verified Firebase MFA claim from their configured IdP, while managed roles use
+ * the RiskSense OTP. The non-production development bypass skips it (FR-02, SEC-03).
  */
 authRouter.post('/session', sessionLimiter, authenticate, validate({ body: CreateSessionBody }), async (req, res) => {
   const viaFirebase = Boolean(req.header('authorization'));
   // Firebase's verified second-factor claim on a configured SSO sign-in satisfies a requestor's
   // second factor. Raw upstream SAML/OIDC attributes are not trusted without a tenant-specific
   // mapping; absent this Firebase claim, PAID requestors fall back to the RiskSense email code.
-  // Privileged roles always complete the RiskSense-controlled factor (SEC-03, DecisionLog 15).
+  // Managed roles always complete the RiskSense-controlled factor (SEC-03, DecisionLog 15).
   const t = req.tenant!;
   const viaSso = viaFirebase && t.features.sso && Boolean(t.sso.providerId) && req.user!.signInProvider === t.sso.providerId;
-  const privileged = PRIVILEGED_ROLES.includes(req.user!.role);
-  // A managed audit account exists only on PAID and must also complete a RiskSense-controlled
-  // second factor. Every other PAID account has either the Firebase MFA claim or this fallback.
-  const paidAudit = t.plan === 'paid' && req.user!.role === 'audit';
   const ssoFirebaseMfaSatisfied = viaSso && req.user!.role === 'requestor' && Boolean(req.identityMfa);
   const otpRequired =
     viaFirebase &&
-    (privileged || paidAudit || (requiresCurrentLoginMfa(req.user!, t) && !ssoFirebaseMfaSatisfied));
+    requiresCurrentLoginMfa(req.user!, t) &&
+    !ssoFirebaseMfaSatisfied;
   const { otpCode } = req.body as z.infer<typeof CreateSessionBody>;
   if (otpRequired) {
     if (!otpCode) throw new AppError('OTP_REQUIRED', 'A verification code is required to sign in');

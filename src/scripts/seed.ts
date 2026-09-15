@@ -12,7 +12,16 @@ import { UserModel, type Role } from '../modules/users/model';
 async function upsertTenant(input: { name: string; slug: string; plan: 'free' | 'paid'; features?: Record<string, boolean>; sectors?: string[]; retentionPolicy?: Record<string, number> }) {
   return TenantModel.findOneAndUpdate(
     { slug: input.slug },
-    { $set: { name: input.name, plan: input.plan, features: input.features ?? {}, sectors: input.sectors ?? [], ...(input.retentionPolicy ? { retentionPolicy: input.retentionPolicy } : {}) } },
+    {
+      $set: {
+        name: input.name,
+        plan: input.plan,
+        features: input.features ?? {},
+        sectors: input.sectors ?? [],
+        authPolicy: { otpRequired: input.plan === 'paid' },
+        ...(input.retentionPolicy ? { retentionPolicy: input.retentionPolicy } : {}),
+      },
+    },
     { upsert: true, new: true, setDefaultsOnInsert: true },
   );
 }

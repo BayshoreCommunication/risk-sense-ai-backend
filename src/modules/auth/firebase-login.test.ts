@@ -23,8 +23,6 @@ import { SessionModel } from './model';
 describe('Firebase bearer login', () => {
   beforeEach(async () => {
     await seeded();
-    // OTP is covered in otp.test.ts; here we test identity → user mapping only.
-    await TenantModel.updateOne({ slug: 'public' }, { $set: { 'authPolicy.otpRequired': false } });
     await TenantModel.updateOne({ slug: 'tac' }, { $set: { 'features.sso': true, sso: { providerId: 'oidc.tac', domain: 'tac.example' } } });
   });
 
@@ -34,11 +32,26 @@ describe('Firebase bearer login', () => {
     expect(res.body.error.code).toBe('UNAUTHENTICATED');
   });
 
-  it('self-provisions an unknown Firebase user as a FREE requestor in the public tenant [FR-01, FR-02]', async () => {
+  it('seeds FREE and PAID tenant auth-policy values consistently [FR-02, SEC-03]', async () => {
+    const tenants = await TenantModel.find({ slug: { $in: ['public', 'tac', 'acme'] } })
+      .select('slug plan authPolicy')
+      .sort({ slug: 1 })
+      .lean();
+    expect(tenants.map(({ slug, plan, authPolicy }) => ({ slug, plan, otpRequired: authPolicy.otpRequired }))).toEqual([
+      { slug: 'acme', plan: 'paid', otpRequired: true },
+      { slug: 'public', plan: 'free', otpRequired: false },
+      { slug: 'tac', plan: 'paid', otpRequired: true },
+    ]);
+  });
+
+  it('self-provisions a FREE requestor directly even when the stored OTP policy is true [FR-01, FR-02, SEC-03]', async () => {
+    // Legacy/default stored values must not override the FREE tier's direct-session invariant.
+    await TenantModel.updateOne({ slug: 'public' }, { $set: { 'authPolicy.otpRequired': true } });
     const res = await request(app).post('/api/v1/auth/session').set('Authorization', 'Bearer uid:abc123:new.person@gmail.com');
     expect(res.status).toBe(201);
     expect(res.body.data.user.role).toBe('requestor');
     expect(res.body.data.tenant.slug).toBe('public');
+    expect(res.body.data.tenant.authPolicy).toEqual({ otpRequired: false });
     const user = await UserModel.findOne({ firebaseUid: 'abc123' });
     expect(user?.email).toBe('new.person@gmail.com');
     expect((await SessionModel.findOne({ sessionId: res.body.data.sessionId }).lean())?.loginAssurance).toMatchObject({
