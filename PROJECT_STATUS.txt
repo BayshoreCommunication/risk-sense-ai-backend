@@ -14,18 +14,18 @@ The requirements in docs/requirements are Draft v1 and have not been signed off.
 - Transactional dataset activation and pinned content/rule/prompt versions.
 - JSON assessment turns with persona/scenario selection, deterministic branching, structured fact extraction/clarification, required-fact gates, deterministic rules/scoring, and explanation.
 - Decision invariant, accept/override/escalate, review queues, dashboards, lifecycle reconstruction, append-only application audit/hash verification, masking/audited unmasking, aggregate reports/exports, retention, and persistent conformance.
-- Requestor, administrator/content, system-administrator, and auditor frontend workspaces.
-- Generated typed frontend API client, English/Bengali message catalogs, and mocked browser correctness suites.
+- Figma-informed Requestor, administrator/content, system-administrator, and auditor frontend workspaces, including the bounded System Audit archive interface.
+- Generated typed frontend API client, exact 1,114/1,114 English/Bengali message/ICU parity, and 31/31 mocked browser correctness cases.
 
 ## Task reconciliation
 
-- T-027 structured content editors are repository-complete; current lint, typecheck, Next.js 16 production build and the 28-case mocked Playwright suite are green.
+- T-027 structured content editors and the Figma-informed role-workspace refresh are repository-complete; current lint, typecheck, the 27/27-route Next.js 16 production build and the 31-case mocked Playwright suite are green.
 - T-028 manual user/persona/department mapping exists; real SSO claim-to-tenant/role mapping remains open.
 - T-037 is deferred and superseded by the JSON request/response design.
 - T-038 chat UI/resume exists; SSE/EventSource streaming was removed.
 - T-064 persistent conformance runs and flags are implemented.
-- T-090 English/Bengali repository coverage is repository-complete with exact 953/953 catalog parity and green aggregate frontend validation. Human Bengali/accessibility/usability acceptance remains open.
-- T-100 repository browser coverage is complete at the mocked-API scope (28/28 current cases); production-like full-stack evidence and human UAT remain external gates.
+- T-090 English/Bengali repository coverage is repository-complete with exact 1,114/1,114 key and ICU-variable parity and green aggregate frontend validation. Human Bengali/accessibility/usability acceptance remains open.
+- T-100 repository browser coverage is complete at the mocked-API scope (31/31 current cases); production-like full-stack evidence and human UAT remain external gates.
 - NFR-08 remains partial because sector choices are hardcoded.
 
 ## AI boundary
@@ -54,7 +54,7 @@ The product has four internal structured AI stages: persona inference, scenario 
 9. Representative live-model validation and accepted accuracy evidence.
 10. Role UAT, accessibility, Bengali review, and comprehension/usability sign-off.
 11. Privacy, legal, residency, provider-processing, and sector/control approvals.
-12. Owner-provided Figma prompt/design and visual acceptance.
+12. Owner visual acceptance of the Figma-informed implementation, requirement-led extensions for incomplete frames, and final Figma comment dispositions.
 
 ## Verification commands
 
@@ -80,4 +80,4 @@ Database/content, only against the explicitly intended environment, includes con
 
 See docs/ai/RequirementsCoverage.md, docs/ai/KnownIssues.md, tasks/sprint-release-readiness.md, and docs/UAT.md for the current evidence boundary.
 
-No production deployment, external acceptance, Figma completion, release tag, or push is asserted by this status file.
+No production deployment, external acceptance, owner Figma acceptance/comment completion, release tag, or push is asserted by this status file.
