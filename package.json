@@ -28,7 +28,8 @@
     "rules:migrate-versions": "tsx src/scripts/migrate-rule-versions.ts",
     "content:verify": "tsx src/scripts/verify-content.ts",
     "test:ai-live": "tsx src/scripts/ai-live.ts",
-    "user:create": "tsx src/scripts/create-user.ts"
+    "user:create": "tsx src/scripts/create-user.ts",
+    "seed:showcase": "tsx src/scripts/seed-showcase.ts"
   },
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "^7.3.0",

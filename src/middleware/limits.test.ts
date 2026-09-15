@@ -19,10 +19,13 @@ describe('rate limits and security headers [SEC-04, NFR-03]', () => {
     expect((await request(app).post('/api/v1/auth/session').set('X-Dev-User', 'requestor@dev.local').set('X-Forwarded-For', '203.0.113.8')).status).toBe(201);
   });
 
-  it('throttles report requests per user after 10 per minute', async () => {
+  it('throttles report requests per user after 60 per minute, leaving room for one dashboard load', async () => {
     const h = await login('admin@paid.local');
+    // The analytics page issues five report calls plus trends on every load; a tighter budget tripped on the
+    // second visit within a minute.
+    for (let i = 0; i < 6; i++) expect((await request(app).get('/api/v1/reports/volume').set(h)).status).toBe(200);
     let last = 0;
-    for (let i = 0; i < 11; i++) last = (await request(app).get('/api/v1/reports/volume').set(h)).status;
+    for (let i = 0; i < 61; i++) last = (await request(app).get('/api/v1/reports/volume').set(h)).status;
     expect(last).toBe(429);
     const other = await login('requestor@paid.local');
     expect((await request(app).get('/api/v1/reports/volume').set(other)).status).toBe(200);

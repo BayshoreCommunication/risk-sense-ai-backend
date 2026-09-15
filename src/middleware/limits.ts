@@ -20,5 +20,9 @@ export const datasetsLimiter = rateLimit({ ...base, windowMs: 60_000, limit: 5, 
 // Keyed by IP; the dev-bypass identity (never accepted in production) gets its own key so local e2e runs that sign in
 // many seeded accounts from 127.0.0.1 are not throttled as one client.
 export const sessionLimiter = rateLimit({ ...base, windowMs: 60_000, limit: 10, keyGenerator: (req) => (isTest || !env.AUTH_DEV_BYPASS ? (req.ip ?? 'anonymous') : (req.header('x-dev-user') ?? req.ip ?? 'anonymous')), message: message('sign-in attempts') });
-/** 10/min per user on report generation and exports (aggregations over a year of data). */
-export const reportsLimiter = rateLimit({ ...base, windowMs: 60_000, limit: 10, message: message('report requests') });
+/**
+ * Report generation and exports. One analytics page load fans out to five report calls plus trends, so a
+ * 10/min budget tripped on the second visit within a minute. 60/min still bounds the expensive aggregations
+ * while leaving room for normal dashboard use and a manual Refresh.
+ */
+export const reportsLimiter = rateLimit({ ...base, windowMs: 60_000, limit: 60, message: message('report requests') });
