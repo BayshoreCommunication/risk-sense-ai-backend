@@ -9,3 +9,6 @@ coverage/
 
 # Vercel CLI link metadata
 .vercel
+# Vercel CLI appends .env* on link; keep the committed template visible.
+.env*
+!.env.example
