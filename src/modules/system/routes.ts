@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { Types, type HydratedDocument } from 'mongoose';
+import { withMongoTransaction } from '../../lib/db';
 import { AppError } from '../../lib/errors';
 import { ok } from '../../lib/http';
 import { authenticate } from '../../middleware/auth';
@@ -11,7 +12,7 @@ import { conformanceService } from '../conformance/service';
 import { TenantModel, type Tenant } from '../tenants/model';
 import { ConformanceFlagsQuery, DrStatusPatch, SystemDepartmentCreate, SystemDepartmentPatch, SystemIdParams, SystemUserCreate, SystemUserPatch, TenantPatch } from './schema';
 import { directoryService } from './directory.service';
-import { DrStatusModel } from './dr.model';
+import { DrStatusModel, FIXED_DR_TARGETS } from './dr.model';
 
 /** System administrator (Bayshore) — tenant configuration. All changes are audited as config changes (FR-25). */
 export const systemRouter = Router();
@@ -45,9 +46,18 @@ systemRouter.patch('/departments/:id', validate({ params: SystemIdParams, body: 
   ok(res, await directoryService.updateDepartment(req.user!.tenantId, String(req.params.id), req.body as SystemDepartmentPatch, req.user!));
 });
 
-const drView = (status: InstanceType<typeof DrStatusModel> | null) => {
-  const backupFresh = Boolean(status?.backupsEnabled && status.lastBackupAt && status.lastBackupAt.getTime() >= Date.now() - 24 * 60 * 60 * 1_000);
-  const drillCurrent = Boolean(status?.lastRestoreDrillOutcome === 'passed' && status.lastRestoreDrillAt && status.lastRestoreDrillAt.getTime() >= Date.now() - 365 * 24 * 60 * 60 * 1_000);
+const drView = (status: InstanceType<typeof DrStatusModel> | null, plan: Tenant['plan']) => {
+  const targets = {
+    ...FIXED_DR_TARGETS,
+    ...(plan === 'paid'
+      ? {
+          rpoHours: status?.targets?.rpoHours ?? FIXED_DR_TARGETS.rpoHours,
+          rtoHours: status?.targets?.rtoHours ?? FIXED_DR_TARGETS.rtoHours,
+        }
+      : {}),
+  };
+  const backupFresh = Boolean(status?.backupsEnabled && status.lastBackupAt && status.lastBackupAt.getTime() >= Date.now() - targets.backupFrequencyHours * 60 * 60 * 1_000);
+  const drillCurrent = Boolean(status?.lastRestoreDrillOutcome === 'passed' && status.lastRestoreDrillAt && status.lastRestoreDrillAt.getTime() >= Date.now() - targets.drillFrequencyDays * 24 * 60 * 60 * 1_000);
   return {
     provider: status?.provider ?? null,
     backupsEnabled: status?.backupsEnabled ?? false,
@@ -55,7 +65,8 @@ const drView = (status: InstanceType<typeof DrStatusModel> | null) => {
     lastRestoreDrillAt: status?.lastRestoreDrillAt ?? null,
     lastRestoreDrillOutcome: status?.lastRestoreDrillOutcome ?? null,
     evidenceRef: status?.evidenceRef ?? null,
-    targets: { backupFrequencyHours: 24, rpoHours: 1, rtoHours: 4, drillFrequencyDays: 365 },
+    targets,
+    targetsConfigurable: plan === 'paid',
     checks: { backupFresh, drillCurrent, externalEvidenceRecorded: Boolean(status?.evidenceRef) },
     readiness: backupFresh && drillCurrent && status?.evidenceRef ? 'ready' : 'attention_required',
     updatedAt: (status as unknown as { updatedAt?: Date } | null)?.updatedAt ?? null,
@@ -64,18 +75,33 @@ const drView = (status: InstanceType<typeof DrStatusModel> | null) => {
 
 /** GET/PATCH /system/dr/status — records external backup/PITR evidence; it never fabricates provider state. */
 systemRouter.get('/dr/status', async (req, res) => {
-  ok(res, drView(await DrStatusModel.findOne({ tenantId: req.user!.tenantId })));
+  const [status, tenant] = await Promise.all([DrStatusModel.findOne({ tenantId: req.user!.tenantId }), TenantModel.findById(req.user!.tenantId).select('plan')]);
+  if (!tenant) throw new AppError('NOT_FOUND', 'tenant');
+  ok(res, drView(status, tenant.plan));
 });
 
 systemRouter.patch('/dr/status', validate({ body: DrStatusPatch }), async (req, res) => {
   const body = req.body as DrStatusPatch;
-  const status = (await DrStatusModel.findOne({ tenantId: req.user!.tenantId })) ?? new DrStatusModel({ tenantId: req.user!.tenantId });
-  const before = drView(status.isNew ? null : status);
-  for (const [key, value] of Object.entries(body)) status.set(key, value ?? undefined);
-  status.recordedBy = new Types.ObjectId(req.user!.id);
-  await status.save();
-  const after = drView(status);
-  await audit.write({ tenantId: req.user!.tenantId, category: 'config', action: 'dr.status_recorded', actor: req.user!, entity: { type: 'dr_status', id: String(status._id) }, payload: { before, after, changed: Object.keys(body) } });
+  const after = await withMongoTransaction(async () => {
+    const tenant = await TenantModel.findById(req.user!.tenantId).select('plan');
+    if (!tenant) throw new AppError('NOT_FOUND', 'tenant');
+    if (body.targets && tenant.plan !== 'paid') throw new AppError('FEATURE_DISABLED', 'Custom recovery targets require a PAID tenant');
+    const status = (await DrStatusModel.findOne({ tenantId: req.user!.tenantId })) ?? new DrStatusModel({ tenantId: req.user!.tenantId });
+    const before = drView(status.isNew ? null : status, tenant.plan);
+    const evidenceChanged = Object.keys(body).some((key) => key !== 'targets');
+    for (const [key, value] of Object.entries(body)) if (key !== 'targets') status.set(key, value ?? undefined);
+    if (body.targets) {
+      if (body.targets.rpoHours !== undefined) status.set('targets.rpoHours', body.targets.rpoHours);
+      if (body.targets.rtoHours !== undefined) status.set('targets.rtoHours', body.targets.rtoHours);
+    }
+    if (evidenceChanged) status.recordedBy = new Types.ObjectId(req.user!.id);
+    // `updatedAt` is the evidence-register timestamp exposed by drView. A policy-only target edit
+    // has its own audit actor/time and must not rewrite the prior evidence recorder or timestamp.
+    await status.save({ timestamps: evidenceChanged });
+    const view = drView(status, tenant.plan);
+    await audit.write({ tenantId: req.user!.tenantId, category: 'config', action: 'dr.status_recorded', actor: req.user!, entity: { type: 'dr_status', id: String(status._id) }, payload: { before, after: view, changed: Object.keys(body) } });
+    return view;
+  });
   ok(res, after);
 });
 

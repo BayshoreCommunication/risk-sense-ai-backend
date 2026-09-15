@@ -15,6 +15,7 @@ import { PersonaBody, PersonaListQuery, PersonaPatch } from '../modules/personas
 import { ScenarioBody, ScenarioListQuery, ScenarioPatch } from '../modules/scenarios/schema';
 import { QuestionBody, QuestionListQuery, QuestionPatch } from '../modules/questions/schema';
 import { JsonUploadBody } from '../modules/datasets/routes';
+import { DATASET_STATUSES } from '../modules/datasets/model';
 import { RuleBody, RuleListQuery, RulePatch, ApproveBody as RuleApproveBody } from '../modules/rules/schema';
 import { MatrixBody, MatrixListQuery, MatrixPatch, SimulateBody } from '../modules/scoring/schema';
 import { ExportQuery, ReportParams, ReportQuery, TrendsQuery } from '../modules/reports/schema';
@@ -183,7 +184,49 @@ registerContent('/scenarios', 'Scenario', ScenarioBody, ScenarioPatch, ScenarioL
 registerContent('/questions', 'Question', QuestionBody, QuestionPatch, QuestionListQuery, { versioned: false });
 
 // ---- Datasets (T-024)
-const Dataset = Any.openapi('Dataset');
+const DatasetPerson = z.object({ id: z.string(), name: z.string() }).openapi('DatasetPerson');
+const Dataset = z
+  .object({
+    _id: z.string(),
+    tenantId: z.string(),
+    seq: z.number().int(),
+    fileName: z.string(),
+    format: z.enum(['xlsx', 'json']),
+    templateVersion: z.number().int(),
+    status: z.enum(DATASET_STATUSES),
+    counts: z.object({
+      personas: z.number().int(),
+      scenarios: z.number().int(),
+      questions: z.number().int(),
+      scoring: z.number().int(),
+      skippedRows: z.number().int(),
+    }),
+    validationErrors: z.array(
+      z.object({ sheet: z.string(), row: z.number().int(), column: z.string().optional(), message: z.string() }),
+    ),
+    // List intentionally excludes the reviewed normalized content; detail/mutation responses include it.
+    content: Any.optional(),
+    authorId: z.string(),
+    reviewerId: z.string().optional(),
+    approvedAt: z.string().datetime().optional(),
+    activatedBy: z.string().optional(),
+    activatedAt: z.string().datetime().optional(),
+    applied: z.object({
+      personas: z.array(z.string()),
+      scenarios: z.array(z.string()),
+      questions: z.array(z.string()),
+      rules: z.array(z.string()),
+      matrix: z.string().optional(),
+    }),
+    failure: z.string().optional(),
+    // People are tenant-scoped display metadata and may be absent for unresolved historical users.
+    author: DatasetPerson.optional(),
+    reviewer: DatasetPerson.optional(),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+    __v: z.number().int().optional(),
+  })
+  .openapi('Dataset');
 registry.registerPath({ method: 'get', path: '/datasets/template', security: secured, responses: { 200: { description: 'XLSX content template', content: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': { schema: z.string().openapi({ format: 'binary' }) } } } } });
 registry.registerPath({ method: 'get', path: '/datasets', security: secured, responses: { 200: { description: 'Uploads, newest first (without content)', content: { 'application/json': { schema: Envelope(z.array(Dataset)) } } } } });
 registry.registerPath({
@@ -259,9 +302,9 @@ registry.registerPath({ method: 'get', path: '/system/departments', security: se
 registry.registerPath({ method: 'post', path: '/system/departments', security: secured, request: { body: { content: { 'application/json': { schema: SystemDepartmentCreate } } } }, responses: { 201: { description: 'Department created', content: { 'application/json': { schema: Envelope(SystemDepartment) } } } } });
 registry.registerPath({ method: 'patch', path: '/system/departments/{id}', security: secured, request: { params: SystemIdParams, body: { content: { 'application/json': { schema: SystemDepartmentPatch } } } }, responses: { 200: { description: 'Department/persona mapping updated', content: { 'application/json': { schema: Envelope(SystemDepartment) } } } } });
 
-const DrStatus = z.object({ provider: z.string().nullable(), backupsEnabled: z.boolean(), lastBackupAt: z.string().nullable(), lastRestoreDrillAt: z.string().nullable(), lastRestoreDrillOutcome: z.enum(['passed', 'failed']).nullable(), evidenceRef: z.string().nullable(), targets: z.object({ backupFrequencyHours: z.number(), rpoHours: z.number(), rtoHours: z.number(), drillFrequencyDays: z.number() }), checks: z.object({ backupFresh: z.boolean(), drillCurrent: z.boolean(), externalEvidenceRecorded: z.boolean() }), readiness: z.enum(['ready', 'attention_required']), updatedAt: z.string().nullable() }).openapi('DrStatus');
-registry.registerPath({ method: 'get', path: '/system/dr/status', security: secured, responses: { 200: { description: 'External backup/PITR evidence and readiness against NFR-06 targets', content: { 'application/json': { schema: Envelope(DrStatus) } } } } });
-registry.registerPath({ method: 'patch', path: '/system/dr/status', security: secured, request: { body: { content: { 'application/json': { schema: DrStatusPatch } } } }, responses: { 200: { description: 'Operator-recorded external DR evidence; audited', content: { 'application/json': { schema: Envelope(DrStatus) } } } } });
+const DrStatus = z.object({ provider: z.string().nullable(), backupsEnabled: z.boolean(), lastBackupAt: z.string().nullable(), lastRestoreDrillAt: z.string().nullable(), lastRestoreDrillOutcome: z.enum(['passed', 'failed']).nullable(), evidenceRef: z.string().nullable(), targets: z.object({ backupFrequencyHours: z.number(), rpoHours: z.number(), rtoHours: z.number(), drillFrequencyDays: z.number() }), targetsConfigurable: z.boolean(), checks: z.object({ backupFresh: z.boolean(), drillCurrent: z.boolean(), externalEvidenceRecorded: z.boolean() }), readiness: z.enum(['ready', 'attention_required']), updatedAt: z.string().nullable() }).openapi('DrStatus');
+registry.registerPath({ method: 'get', path: '/system/dr/status', security: secured, responses: { 200: { description: 'External backup/PITR evidence and effective NFR-06 targets; PAID tenants may configure stricter RPO/RTO targets', content: { 'application/json': { schema: Envelope(DrStatus) } } } } });
+registry.registerPath({ method: 'patch', path: '/system/dr/status', security: secured, request: { body: { content: { 'application/json': { schema: DrStatusPatch } } } }, responses: { 200: { description: 'Audited operator evidence or PAID recovery-target configuration; target settings do not assert provider state', content: { 'application/json': { schema: Envelope(DrStatus) } } } } });
 
 const ConformanceRun = z.object({ tenantId: z.string(), slug: z.string(), ranAt: z.string(), trigger: z.string(), scanned: z.number(), valid: z.number(), flagged: z.number(), resolved: z.number(), durationMs: z.number() }).openapi('ConformanceRun');
 registry.registerPath({ method: 'post', path: '/system/conformance/run', security: secured, responses: { 200: { description: 'Scan all stored tenant assessments and flag schema/invariant failures (FR-30)', content: { 'application/json': { schema: Envelope(ConformanceRun) } } } } });

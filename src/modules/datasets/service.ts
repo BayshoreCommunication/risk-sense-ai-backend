@@ -13,6 +13,7 @@ import { rulesService } from '../rules/service';
 import { RuleModel } from '../rules/model';
 import { scoringService } from '../scoring/service';
 import { ScoringMatrixModel } from '../scoring/model';
+import { UserModel } from '../users/model';
 import { DatasetModel } from './model';
 import { parseUpload, type ParsedContent, type RowError } from './parse';
 import { TEMPLATE_VERSION } from './template';
@@ -22,6 +23,38 @@ async function load(tenantId: string, id: string) {
   const doc = await DatasetModel.findOne({ _id: id, tenantId });
   if (!doc) throw notFound('dataset');
   return doc;
+}
+
+type DatasetPerson = { id: string; name: string };
+type DatasetProvenanceSource = { authorId?: unknown; reviewerId?: unknown };
+
+/**
+ * Dataset records retain immutable author/reviewer ids. Resolve display names in one tenant-scoped
+ * query so list responses expose useful provenance without replacing those ids or introducing N+1
+ * lookups. A missing historical user stays unresolved rather than fabricating a label (FR-14).
+ */
+async function attachPeople<T extends DatasetProvenanceSource>(tenantId: string, datasets: T[]) {
+  const ids = [
+    ...new Set(
+      datasets
+        .flatMap((dataset) => [dataset.authorId, dataset.reviewerId])
+        .filter((id): id is NonNullable<typeof id> => id !== undefined && id !== null)
+        .map(String),
+    ),
+  ].filter((id) => Types.ObjectId.isValid(id));
+
+  const users = ids.length
+    ? await UserModel.find({ tenantId, _id: { $in: ids } }).select('_id name').lean()
+    : [];
+  const people = new Map<string, DatasetPerson>(
+    users.map((user) => [String(user._id), { id: String(user._id), name: user.name }]),
+  );
+
+  return datasets.map((dataset) => {
+    const author = dataset.authorId ? people.get(String(dataset.authorId)) : undefined;
+    const reviewer = dataset.reviewerId ? people.get(String(dataset.reviewerId)) : undefined;
+    return { ...dataset, ...(author ? { author } : {}), ...(reviewer ? { reviewer } : {}) };
+  });
 }
 
 /**
@@ -96,12 +129,14 @@ async function crossValidate(tenantId: string, parsed: ParsedContent): Promise<R
 }
 
 export const datasetsService = {
-  list(tenantId: string) {
-    return DatasetModel.find({ tenantId }).sort({ seq: -1 }).select('-content').lean();
+  async list(tenantId: string) {
+    const datasets = await DatasetModel.find({ tenantId }).sort({ seq: -1 }).select('-content').lean();
+    return attachPeople(tenantId, datasets);
   },
 
   async get(tenantId: string, id: string) {
-    return load(tenantId, id);
+    const dataset = await load(tenantId, id);
+    return (await attachPeople(tenantId, [dataset.toObject()]))[0];
   },
 
   /** Parse + validate + store. Status `validated` (ready for review) or `rejected` (row errors). Never applies anything. */

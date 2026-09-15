@@ -6,7 +6,9 @@ import { PersonaModel } from '../personas/model';
 import { SessionModel } from '../auth/model';
 import { AuditLogModel } from '../audit/model';
 import { audit } from '../audit/service';
+import { TenantModel } from '../tenants/model';
 import { UserModel } from '../users/model';
+import { DrStatusModel } from './dr.model';
 
 describe('system directory administration [FR-02, FR-10, SEC-01]', () => {
   beforeEach(async () => {
@@ -114,7 +116,15 @@ describe('system directory administration [FR-02, FR-10, SEC-01]', () => {
   it('reports DR as unverified until external backup and restore-drill evidence is recorded [NFR-06]', async () => {
     const sysadmin = await login('sysadmin@dev.local');
     const empty = await request(app).get('/api/v1/system/dr/status').set(sysadmin);
-    expect(empty.body.data).toMatchObject({ readiness: 'attention_required', checks: { backupFresh: false, drillCurrent: false, externalEvidenceRecorded: false } });
+    expect(empty.body.data).toMatchObject({
+      readiness: 'attention_required',
+      targetsConfigurable: false,
+      targets: { backupFrequencyHours: 24, rpoHours: 1, rtoHours: 4, drillFrequencyDays: 365 },
+      checks: { backupFresh: false, drillCurrent: false, externalEvidenceRecorded: false },
+    });
+    const fixedTargets = await request(app).patch('/api/v1/system/dr/status').set(sysadmin).send({ targets: { rpoHours: 0.5, rtoHours: 2 } });
+    expect(fixedTargets.status).toBe(403);
+    expect(fixedTargets.body.error.code).toBe('FEATURE_DISABLED');
     const now = new Date();
     const recorded = await request(app).patch('/api/v1/system/dr/status').set(sysadmin).send({
       provider: 'MongoDB Atlas',
@@ -127,5 +137,119 @@ describe('system directory administration [FR-02, FR-10, SEC-01]', () => {
     expect(recorded.status).toBe(200);
     expect(recorded.body.data).toMatchObject({ readiness: 'ready', checks: { backupFresh: true, drillCurrent: true, externalEvidenceRecorded: true }, targets: { rpoHours: 1, rtoHours: 4 } });
     expect(await AuditLogModel.countDocuments({ action: 'dr.status_recorded' })).toBe(1);
+  });
+
+  it('rolls back DR state when its required audit write fails [NFR-06, SEC-07]', async () => {
+    const sysadmin = await login('sysadmin@dev.local');
+    const writeAudit = audit.write.bind(audit);
+    const writeSpy = vi.spyOn(audit, 'write').mockImplementation(async (entry) => {
+      if (entry.action === 'dr.status_recorded') throw new Error('forced DR audit failure');
+      return writeAudit(entry);
+    });
+    const failed = await request(app).patch('/api/v1/system/dr/status').set(sysadmin).send({
+      provider: 'MongoDB Atlas',
+      backupsEnabled: true,
+    });
+    writeSpy.mockRestore();
+
+    expect(failed.status).toBe(500);
+    expect(await DrStatusModel.countDocuments()).toBe(0);
+    expect(await AuditLogModel.countDocuments({ action: 'dr.status_recorded' })).toBe(0);
+
+    const retry = await request(app).patch('/api/v1/system/dr/status').set(sysadmin).send({
+      provider: 'MongoDB Atlas',
+      backupsEnabled: true,
+    });
+    expect(retry.status).toBe(200);
+    expect(await DrStatusModel.countDocuments()).toBe(1);
+    expect(await AuditLogModel.countDocuments({ action: 'dr.status_recorded' })).toBe(1);
+  });
+
+  it('keeps evidence provenance unchanged across another operator target-only edit [NFR-06, FR-25]', async () => {
+    const acme = await TenantModel.findOne({ slug: 'acme' });
+    expect(acme).not.toBeNull();
+    await UserModel.create([
+      {
+        firebaseUid: 'dev:dr.evidence@paid.local',
+        email: 'dr.evidence@paid.local',
+        name: 'DR Evidence Operator',
+        role: 'system_administrator',
+        tenantId: acme!._id,
+        mfaEnrolled: true,
+        status: 'active',
+      },
+      {
+        firebaseUid: 'dev:dr.policy@paid.local',
+        email: 'dr.policy@paid.local',
+        name: 'DR Policy Operator',
+        role: 'system_administrator',
+        tenantId: acme!._id,
+        mfaEnrolled: true,
+        status: 'active',
+      },
+    ]);
+    const evidenceOperator = await login('dr.evidence@paid.local');
+    const policyOperator = await login('dr.policy@paid.local');
+    const evidenceUser = await UserModel.findOne({ email: 'dr.evidence@paid.local' }).lean();
+    const policyUser = await UserModel.findOne({ email: 'dr.policy@paid.local' }).lean();
+
+    const evidence = await request(app).patch('/api/v1/system/dr/status').set(evidenceOperator).send({
+      provider: 'MongoDB Atlas',
+      backupsEnabled: true,
+      evidenceRef: 'https://example.com/external-dr-evidence/provenance',
+    });
+    expect(evidence.status).toBe(200);
+    const before = await DrStatusModel.findOne({ tenantId: acme!._id }).lean();
+    expect(String(before?.recordedBy)).toBe(String(evidenceUser?._id));
+    expect(before?.updatedAt).toBeTruthy();
+
+    const target = await request(app)
+      .patch('/api/v1/system/dr/status')
+      .set(policyOperator)
+      .send({ targets: { rpoHours: 0.5, rtoHours: 2 } });
+    expect(target.status).toBe(200);
+    const after = await DrStatusModel.findOne({ tenantId: acme!._id }).lean();
+    expect(after?.targets).toMatchObject({ rpoHours: 0.5, rtoHours: 2 });
+    expect(String(after?.recordedBy)).toBe(String(evidenceUser?._id));
+    expect(after?.updatedAt?.getTime()).toBe(before?.updatedAt?.getTime());
+    expect(target.body.data.updatedAt).toBe(before?.updatedAt?.toISOString());
+
+    const targetAudit = await AuditLogModel.findOne({ action: 'dr.status_recorded' }).sort({ seq: -1 }).lean();
+    expect(String(targetAudit?.actorUserId)).toBe(String(policyUser?._id));
+    expect(targetAudit?.payload).toMatchObject({ changed: ['targets'] });
+  });
+
+  it('lets PAID tenants configure stricter RPO/RTO policy without asserting provider readiness [NFR-06, FR-25]', async () => {
+    const acme = await TenantModel.findOne({ slug: 'acme' });
+    expect(acme).not.toBeNull();
+    await UserModel.create({
+      firebaseUid: 'dev:dr.sysadmin@paid.local',
+      email: 'dr.sysadmin@paid.local',
+      name: 'DR System Administrator',
+      role: 'system_administrator',
+      tenantId: acme!._id,
+      mfaEnrolled: true,
+      status: 'active',
+    });
+    const sysadmin = await login('dr.sysadmin@paid.local');
+
+    const initial = await request(app).get('/api/v1/system/dr/status').set(sysadmin);
+    expect(initial.body.data).toMatchObject({
+      targetsConfigurable: true,
+      targets: { backupFrequencyHours: 24, rpoHours: 1, rtoHours: 4, drillFrequencyDays: 365 },
+      readiness: 'attention_required',
+    });
+
+    const rpo = await request(app).patch('/api/v1/system/dr/status').set(sysadmin).send({ targets: { rpoHours: 0.5 } });
+    expect(rpo.status).toBe(200);
+    expect(rpo.body.data).toMatchObject({ targetsConfigurable: true, targets: { rpoHours: 0.5, rtoHours: 4 }, readiness: 'attention_required' });
+
+    const rto = await request(app).patch('/api/v1/system/dr/status').set(sysadmin).send({ targets: { rtoHours: 2 } });
+    expect(rto.status).toBe(200);
+    expect(rto.body.data).toMatchObject({ targets: { rpoHours: 0.5, rtoHours: 2 }, checks: { backupFresh: false, drillCurrent: false, externalEvidenceRecorded: false } });
+
+    expect((await request(app).patch('/api/v1/system/dr/status').set(sysadmin).send({ targets: { rpoHours: 1.01 } })).status).toBe(400);
+    expect((await request(app).patch('/api/v1/system/dr/status').set(sysadmin).send({ targets: { rtoHours: 4.01 } })).status).toBe(400);
+    expect(await AuditLogModel.countDocuments({ action: 'dr.status_recorded' })).toBe(2);
   });
 });

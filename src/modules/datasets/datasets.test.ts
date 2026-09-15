@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { app, login, seeded } from '../../tests/helpers';
@@ -77,6 +79,46 @@ describe('datasets (FR-13, FR-14, AI-04, AI-06)', () => {
     const other = await request(app).post(`/api/v1/datasets/${id}/approve`).set(admin2);
     expect(other.status).toBe(200);
     expect(other.body.data.status).toBe('approved');
+  });
+
+  it('lists retained author and reviewer provenance with tenant-scoped display names [FR-14]', async () => {
+    const up = await uploadJson(admin, SAMPLE);
+    const id = up.body.data._id as string;
+    await request(app).post(`/api/v1/datasets/${id}/approve`).set(admin2);
+
+    const list = await request(app).get('/api/v1/datasets').set(admin);
+    expect(list.status).toBe(200);
+    expect(list.body.data).toHaveLength(1);
+    expect(list.body.data[0]).toMatchObject({
+      _id: id,
+      author: { id: up.body.data.authorId, name: 'Dev Administrator (TAC)' },
+      reviewer: { name: 'Dev Administrator 2 (TAC reviewer)' },
+    });
+    expect(list.body.data[0].author).not.toHaveProperty('email');
+    expect(list.body.data[0].reviewer).not.toHaveProperty('email');
+    expect(list.body.data[0]).not.toHaveProperty('content');
+
+    const detail = await request(app).get(`/api/v1/datasets/${id}`).set(admin);
+    expect(detail.status).toBe(200);
+    expect(detail.body.data.author.name).toBe('Dev Administrator (TAC)');
+    expect(detail.body.data.reviewer.name).toBe('Dev Administrator 2 (TAC reviewer)');
+    expect(detail.body.data).toHaveProperty('content');
+  });
+
+  it('publishes explicit author and reviewer fields in the generated Dataset contract [FR-14]', () => {
+    const spec = JSON.parse(readFileSync(join(process.cwd(), 'openapi.json'), 'utf8')) as {
+      components: { schemas: { Dataset: { properties?: Record<string, unknown>; required?: string[] } } };
+    };
+    const schema = spec.components.schemas.Dataset;
+    expect(schema.properties).toMatchObject({
+      authorId: { type: 'string' },
+      reviewerId: { type: 'string' },
+      author: { $ref: '#/components/schemas/DatasetPerson' },
+      reviewer: { $ref: '#/components/schemas/DatasetPerson' },
+    });
+    expect(schema.required).toContain('authorId');
+    expect(schema.required).not.toContain('author');
+    expect(schema.required).not.toContain('reviewer');
   });
 
   it('activation without approval is refused [AI-06]', async () => {

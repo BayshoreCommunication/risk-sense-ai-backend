@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { TENANT_PLANS } from '../tenants/model';
 import { ROLES } from '../users/model';
+import { FIXED_DR_TARGETS } from './dr.model';
 
 /** System administrator tenant settings (W10, FR-03, SEC-02, SEC-06). Every field optional: PATCH semantics. */
 export const TenantPatch = z
@@ -74,6 +75,14 @@ export type SystemDepartmentPatch = z.infer<typeof SystemDepartmentPatch>;
 
 export const SystemIdParams = z.object({ id: ObjectIdString });
 
+const DrTargetsPatch = z
+  .object({
+    rpoHours: z.number().finite().positive().max(FIXED_DR_TARGETS.rpoHours).optional(),
+    rtoHours: z.number().finite().positive().max(FIXED_DR_TARGETS.rtoHours).optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, 'at least one recovery target is required');
+
 export const DrStatusPatch = z
   .object({
     provider: z.string().min(2).max(120).optional(),
@@ -82,6 +91,7 @@ export const DrStatusPatch = z
     lastRestoreDrillAt: z.coerce.date().optional(),
     lastRestoreDrillOutcome: z.enum(['passed', 'failed']).optional(),
     evidenceRef: z.string().url().max(2_000).nullable().optional(),
+    targets: DrTargetsPatch.optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, 'at least one field is required');

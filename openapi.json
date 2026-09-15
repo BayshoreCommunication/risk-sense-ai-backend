@@ -203,11 +203,205 @@
           "nullable": true
         }
       },
+      "DatasetPerson": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
       "Dataset": {
         "type": "object",
-        "additionalProperties": {
-          "nullable": true
-        }
+        "properties": {
+          "_id": {
+            "type": "string"
+          },
+          "tenantId": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "fileName": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "xlsx",
+              "json"
+            ]
+          },
+          "templateVersion": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "rejected",
+              "validated",
+              "approved",
+              "active",
+              "failed"
+            ]
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "personas": {
+                "type": "integer"
+              },
+              "scenarios": {
+                "type": "integer"
+              },
+              "questions": {
+                "type": "integer"
+              },
+              "scoring": {
+                "type": "integer"
+              },
+              "skippedRows": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "personas",
+              "scenarios",
+              "questions",
+              "scoring",
+              "skippedRows"
+            ]
+          },
+          "validationErrors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "sheet": {
+                  "type": "string"
+                },
+                "row": {
+                  "type": "integer"
+                },
+                "column": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "sheet",
+                "row",
+                "message"
+              ]
+            }
+          },
+          "content": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            }
+          },
+          "authorId": {
+            "type": "string"
+          },
+          "reviewerId": {
+            "type": "string"
+          },
+          "approvedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "activatedBy": {
+            "type": "string"
+          },
+          "activatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "applied": {
+            "type": "object",
+            "properties": {
+              "personas": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "scenarios": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "questions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "rules": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "matrix": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "personas",
+              "scenarios",
+              "questions",
+              "rules"
+            ]
+          },
+          "failure": {
+            "type": "string"
+          },
+          "author": {
+            "$ref": "#/components/schemas/DatasetPerson"
+          },
+          "reviewer": {
+            "$ref": "#/components/schemas/DatasetPerson"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "__v": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "_id",
+          "tenantId",
+          "seq",
+          "fileName",
+          "format",
+          "templateVersion",
+          "status",
+          "counts",
+          "validationErrors",
+          "authorId",
+          "applied",
+          "createdAt",
+          "updatedAt"
+        ]
       },
       "Rule": {
         "type": "object",
@@ -754,6 +948,9 @@
               "drillFrequencyDays"
             ]
           },
+          "targetsConfigurable": {
+            "type": "boolean"
+          },
           "checks": {
             "type": "object",
             "properties": {
@@ -793,6 +990,7 @@
           "lastRestoreDrillOutcome",
           "evidenceRef",
           "targets",
+          "targetsConfigurable",
           "checks",
           "readiness",
           "updatedAt"
@@ -24213,7 +24411,7 @@
         ],
         "responses": {
           "200": {
-            "description": "External backup/PITR evidence and readiness against NFR-06 targets",
+            "description": "External backup/PITR evidence and effective NFR-06 targets; PAID tenants may configure stricter RPO/RTO targets",
             "content": {
               "application/json": {
                 "schema": {
@@ -24285,6 +24483,24 @@
                     "nullable": true,
                     "maxLength": 2000,
                     "format": "uri"
+                  },
+                  "targets": {
+                    "type": "object",
+                    "properties": {
+                      "rpoHours": {
+                        "type": "number",
+                        "minimum": 0,
+                        "exclusiveMinimum": true,
+                        "maximum": 1
+                      },
+                      "rtoHours": {
+                        "type": "number",
+                        "minimum": 0,
+                        "exclusiveMinimum": true,
+                        "maximum": 4
+                      }
+                    },
+                    "additionalProperties": false
                   }
                 },
                 "additionalProperties": false
@@ -24294,7 +24510,7 @@
         },
         "responses": {
           "200": {
-            "description": "Operator-recorded external DR evidence; audited",
+            "description": "Audited operator evidence or PAID recovery-target configuration; target settings do not assert provider state",
             "content": {
               "application/json": {
                 "schema": {
