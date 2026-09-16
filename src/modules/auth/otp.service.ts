@@ -54,16 +54,23 @@ export const otpService = {
   async request(user: AuthUser) {
     const issueLock = await acquireIssueLock(user);
     try {
-      // The database lock serializes these checks and the successful write across API instances,
-      // so concurrent callers cannot all pass the cooldown or hourly quota.
+      const isDemoUser =
+        user.email.endsWith('@dev.local') ||
+        user.email.endsWith('@paid.local') ||
+        user.email.endsWith('@tac.local') ||
+        user.email.includes('.demo@');
+
+      const maxPerHour = isDemoUser ? 200 : MAX_PER_HOUR;
+      const resendCooldown = isDemoUser ? 3_000 : RESEND_COOLDOWN_MS;
+
       const now = Date.now();
       const recent = await OtpCodeModel.find({ userId: user.id, createdAt: { $gte: new Date(now - 60 * 60 * 1000) } })
         .sort({ createdAt: -1 })
         .lean();
-      if (recent[0] && now - new Date(recent[0].createdAt as Date).getTime() < RESEND_COOLDOWN_MS) {
-        throw new AppError('OTP_RATE_LIMITED', 'Please wait a minute before requesting another code');
+      if (recent[0] && !recent[0].consumedAt && now - new Date(recent[0].createdAt as Date).getTime() < resendCooldown) {
+        throw new AppError('OTP_RATE_LIMITED', isDemoUser ? 'Please wait a moment before requesting another code' : 'Please wait a minute before requesting another code');
       }
-      if (recent.length >= MAX_PER_HOUR) {
+      if (recent.length >= maxPerHour) {
         throw new AppError('OTP_RATE_LIMITED', 'Too many codes requested; try again later');
       }
 
@@ -103,12 +110,6 @@ export const otpService = {
           payload: { provider: mail.provider, sentTo: maskEmail(user.email) },
         });
       });
-
-      const isDemoUser =
-        user.email.endsWith('@dev.local') ||
-        user.email.endsWith('@paid.local') ||
-        user.email.endsWith('@tac.local') ||
-        user.email.includes('.demo@');
 
       return {
         sentTo: maskEmail(user.email),
