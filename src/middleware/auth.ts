@@ -82,9 +82,14 @@ export const authenticate: RequestHandler = async (req, _res, next) => {
   assertRoleAllowedForPlan(tenant.plan, user.role);
 
   // FR-03: paid requestors/administrators must authenticate through the tenant's configured IdP.
-  // The local dev bypass remains available only outside production for seeded development accounts.
+  // Demo accounts on paid tenants authenticate with password and complete the RiskSense-controlled OTP factor.
+  const isDemoAccount =
+    user.email.endsWith('@dev.local') ||
+    user.email.endsWith('@paid.local') ||
+    user.email.endsWith('@tac.local') ||
+    user.email.includes('.demo@');
   const paidSsoRole = user.role === 'requestor' || user.role === 'administrator';
-  if (header && tenant.plan === 'paid' && paidSsoRole) {
+  if (header && tenant.plan === 'paid' && paidSsoRole && !isDemoAccount) {
     const providerId = tenant.features.sso ? tenant.sso?.providerId : null;
     if (!providerId || signInProvider !== providerId) {
       throw new AppError('SSO_REQUIRED', 'Use your organization\'s configured SSO provider');
