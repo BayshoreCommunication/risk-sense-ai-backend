@@ -19,10 +19,20 @@ export async function sendMail(mail: Mail): Promise<{ provider: string; id?: str
   switch (env.MAIL_PROVIDER) {
     case 'resend': {
       if (!env.RESEND_API_KEY) throw new Error('RESEND_API_KEY is not set');
+      const isSandboxSender = env.MAIL_FROM.includes('onboarding@resend.dev');
+      const targetRecipient = isSandboxSender && mail.to !== 'coderaise247@gmail.com'
+        ? 'coderaise247@gmail.com'
+        : mail.to;
       const res = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: env.MAIL_FROM, to: [mail.to], subject: mail.subject, text: mail.text, html: mail.html }),
+        body: JSON.stringify({
+          from: env.MAIL_FROM,
+          to: [targetRecipient],
+          subject: targetRecipient !== mail.to ? `[Demo for ${mail.to}] ${mail.subject}` : mail.subject,
+          text: targetRecipient !== mail.to ? `Demo user: ${mail.to}\n\n${mail.text}` : mail.text,
+          html: mail.html,
+        }),
       });
       if (!res.ok) {
         let detail = await res.text();
