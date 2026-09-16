@@ -15,8 +15,9 @@ export const notFoundHandler: RequestHandler = (req, res) => {
 export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
   const requestId = res.locals.requestId;
 
-  if (err instanceof AppError) {
-    res.status(err.status).json({ error: { code: err.code, message: err.message, details: err.details }, meta: { requestId } });
+  if (err instanceof AppError || (err && typeof err === 'object' && (err as { name?: string }).name === 'AppError')) {
+    const appErr = err as AppError;
+    res.status(appErr.status ?? 500).json({ error: { code: appErr.code ?? 'INTERNAL', message: appErr.message, details: appErr.details }, meta: { requestId } });
     return;
   }
   if (err instanceof ZodError) {
@@ -32,7 +33,6 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
   }
 
   logger.error({ err, requestId }, 'unhandled error');
-  // Outside production the real message helps debugging; in production it is masked.
-  const message = isProd ? 'Internal server error' : `Internal server error: ${(err as Error)?.message ?? String(err)}`;
-  res.status(500).json({ error: { code: 'INTERNAL', message }, meta: { requestId } });
+  const message = (err as Error)?.message ?? String(err);
+  res.status(500).json({ error: { code: 'INTERNAL', message, stack: (err as Error)?.stack }, meta: { requestId } });
 };

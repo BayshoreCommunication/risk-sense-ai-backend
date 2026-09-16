@@ -14,8 +14,17 @@ async function getApp(): Promise<App> {
     throw new AppError('UNAUTHENTICATED', 'Firebase is not configured on this server');
   }
   const { initializeApp, cert, getApps } = await import('firebase-admin/app');
-  const json = JSON.parse(Buffer.from(env.FIREBASE_SERVICE_ACCOUNT_B64, 'base64').toString('utf8'));
-  app = getApps()[0] ?? initializeApp({ credential: cert(json), projectId: env.FIREBASE_PROJECT_ID ?? json.project_id });
+  let json: Record<string, unknown>;
+  try {
+    json = JSON.parse(Buffer.from(env.FIREBASE_SERVICE_ACCOUNT_B64, 'base64').toString('utf8'));
+  } catch (e) {
+    throw new AppError('INTERNAL', `Firebase service account JSON parse failed: ${(e as Error)?.message}`);
+  }
+  try {
+    app = getApps()[0] ?? initializeApp({ credential: cert(json as Parameters<typeof cert>[0]), projectId: env.FIREBASE_PROJECT_ID ?? (json.project_id as string) });
+  } catch (e) {
+    throw new AppError('INTERNAL', `Firebase initializeApp failed: ${(e as Error)?.message}`);
+  }
   return app;
 }
 
