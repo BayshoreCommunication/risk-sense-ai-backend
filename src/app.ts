@@ -42,7 +42,7 @@ export function createApp() {
       // API only: no HTML is served, so a strict CSP is fine; HSTS is meaningful once Render terminates TLS (SEC-04).
       contentSecurityPolicy: { directives: { defaultSrc: ["'none'"], frameAncestors: ["'none'"] } },
       hsts: { maxAge: 63072000, includeSubDomains: true, preload: true },
-      crossOriginResourcePolicy: { policy: 'same-site' },
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
       referrerPolicy: { policy: 'no-referrer' },
     }),
   );
