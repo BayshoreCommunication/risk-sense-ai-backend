@@ -33,6 +33,6 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
   }
 
   logger.error({ err, requestId }, 'unhandled error');
-  const message = (err as Error)?.message ?? String(err);
-  res.status(500).json({ error: { code: 'INTERNAL', message, stack: (err as Error)?.stack }, meta: { requestId } });
+  const message = isProd ? 'Internal server error' : ((err as Error)?.message ?? String(err));
+  res.status(500).json({ error: { code: 'INTERNAL', message }, meta: { requestId } });
 };
