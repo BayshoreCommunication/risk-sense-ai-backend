@@ -23,7 +23,6 @@ dotenv.config();
 import { connectDb, disconnectDb } from '../lib/db';
 import { AssessmentMessageModel, AssessmentModel } from '../modules/assessments/model';
 import { audit } from '../modules/audit/service';
-import { ConformanceRunModel, AssessmentConformanceFlagModel } from '../modules/conformance/model';
 import { conformanceService } from '../modules/conformance/service';
 import { RetentionRunModel } from '../modules/retention/model';
 import { DrStatusModel } from '../modules/system/dr.model';
@@ -535,7 +534,6 @@ export async function seedMeaningfulData() {
   // 4. Create Audit Logs for Configuration Events
   const adminId = userDocs['admin@dev.local']!;
   const sysadminId = userDocs['sysadmin@dev.local']!;
-  const auditId = userDocs['audit@dev.local']!;
 
   await audit.write({
     tenantId: String(tac._id),
