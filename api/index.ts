@@ -35,9 +35,31 @@ function ready(): Promise<unknown> {
   return connecting;
 }
 
+/**
+ * The first request to a cold instance was reliably answering 503 while the next one succeeded: an
+ * `mongodb+srv` connect on a cold lambda has to resolve SRV and TXT records, negotiate TLS and
+ * authenticate, and that exceeded `serverSelectionTimeoutMS` often enough to be the normal experience
+ * of opening the app. Retrying inside the same invocation turns that into the one slow request it
+ * always was, instead of an error the visitor has to reload past. `maxDuration` is 60s in vercel.json,
+ * so two 10s attempts stay well inside the function budget.
+ */
+const CONNECT_ATTEMPTS = 2;
+
+async function readyWithRetry(): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await ready();
+      return;
+    } catch (err) {
+      if (attempt >= CONNECT_ATTEMPTS) throw err;
+      logger.warn({ err, attempt }, 'database connection attempt failed, retrying in this invocation');
+    }
+  }
+}
+
 export default async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
   try {
-    await ready();
+    await readyWithRetry();
   } catch (err) {
     // Fail loudly rather than letting Express answer database-backed routes with a confusing 500.
     logger.error({ err }, 'database connection failed for this invocation');
