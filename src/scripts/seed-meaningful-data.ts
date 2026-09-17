@@ -28,6 +28,14 @@ import { RetentionRunModel } from '../modules/retention/model';
 import { DrStatusModel } from '../modules/system/dr.model';
 import { DepartmentModel, TenantModel } from '../modules/tenants/model';
 import { UserModel, type Role } from '../modules/users/model';
+
+/**
+ * Password for the seeded demo accounts in Firebase Auth. Read from the environment so the value is not
+ * carried in the repository and can be rotated without a release. The script refuses to run without it
+ * rather than inventing a default, because a guessable password on accounts that reach production is
+ * worse than a seed that stops and says what is missing.
+ */
+const DEMO_PASSWORD = process.env.DEMO_USER_PASSWORD ?? '';
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 
@@ -470,17 +478,20 @@ export async function seedMeaningfulData() {
   }
 
   let requestorFbUid = 'dev:requestor@tac.local';
+  if (firebaseAuth && !DEMO_PASSWORD) {
+    throw new Error('DEMO_USER_PASSWORD is required to seed the Firebase demo accounts; set it in the environment (see .env.example)');
+  }
   if (firebaseAuth) {
     try {
       const existing = await firebaseAuth.getUserByEmail('requestor@tac.local');
       requestorFbUid = existing.uid;
-      await firebaseAuth.updateUser(existing.uid, { password: 'RiskSense2026!', emailVerified: true, displayName: 'David Kim (Demo Requestor)' });
+      await firebaseAuth.updateUser(existing.uid, { password: DEMO_PASSWORD, emailVerified: true, displayName: 'David Kim (Demo Requestor)' });
       console.log(`✓ Updated Firebase user for requestor@tac.local: ${existing.uid}`);
     } catch (err) {
       if ((err as { code?: string }).code === 'auth/user-not-found') {
         const created = await firebaseAuth.createUser({
           email: 'requestor@tac.local',
-          password: 'RiskSense2026!',
+          password: DEMO_PASSWORD,
           emailVerified: true,
           displayName: 'David Kim (Demo Requestor)',
         });
