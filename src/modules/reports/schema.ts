@@ -4,7 +4,7 @@ import { KEY_REGEX } from '../shared/enums';
 export const REPORT_TYPES = ['volume', 'classification', 'override-rate', 'assessment-time'] as const;
 export type ReportType = (typeof REPORT_TYPES)[number];
 export const INTERVALS = ['day', 'week', 'month'] as const;
-export const TREND_DIMENSIONS = ['department', 'persona', 'scenario'] as const;
+export const TREND_DIMENSIONS = ['department', 'persona', 'scenario', 'classification'] as const;
 export const EXPORT_FORMATS = ['csv', 'pdf'] as const;
 
 const OBJECT_ID = /^[a-f\d]{24}$/i;

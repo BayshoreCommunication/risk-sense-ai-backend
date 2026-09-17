@@ -23646,7 +23646,8 @@
               "enum": [
                 "department",
                 "persona",
-                "scenario"
+                "scenario",
+                "classification"
               ],
               "default": "department"
             },

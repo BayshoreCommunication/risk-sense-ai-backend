@@ -208,7 +208,13 @@ export const reportsService = {
   async trends(user: AuthUser, tenant: AuthTenant, q: TrendsQuery) {
     return cached(user, tenant, `trends:${q.by}`, q, async () => {
       const { from, to } = range(q);
-      const dim = q.by === 'department' ? '$departmentId' : q.by === 'persona' ? '$personaKey' : '$scenarioKey';
+      // `classification` groups by the final classification, which lets one call fill a stacked
+      // per-period chart instead of one request per period.
+      const dim =
+        q.by === 'department' ? '$departmentId'
+        : q.by === 'persona' ? '$personaKey'
+        : q.by === 'classification' ? FINAL_CLASS
+        : '$scenarioKey';
       const grouped = await AssessmentModel.aggregate<{ _id: { period: string; group: unknown }; count: number; avgScore: number | null; issues: number; elevated: number }>([
         { $match: baseMatch(user, q) },
         { $group: { _id: { period: periodExpr(q.interval), group: dim }, count: { $sum: 1 }, avgScore: { $avg: '$result.score' }, issues: { $sum: { $cond: [{ $eq: [FINAL_CLASS, 'issue'] }, 1, 0] } }, elevated: { $sum: { $cond: [{ $eq: [FINAL_CLASS, 'elevated_risk'] }, 1, 0] } } } },
