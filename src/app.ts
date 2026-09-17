@@ -59,10 +59,16 @@ export function createApp() {
   app.use(express.json({ limit: '1mb' }));
   app.use(
     rateLimit({
-      // API.md "Rate limits": 60 req/min per user — keyed by app session, then the dev-bypass identity (non-production
-      // only), then IP for unauthenticated calls. Per-route limits in middleware/limits.ts sit on top.
+      // API.md "Rate limits": a coarse per-caller backstop — keyed by app session, then the dev-bypass identity
+      // (non-production only), then IP for unauthenticated calls. The real protection is the per-route limits in
+      // middleware/limits.ts, which sit on top of this and stay tight on the expensive routes.
+      //
+      // 60/min was below normal single-user traffic and throttled the product against itself: one /admin/reports
+      // view costs eight reads (shell /me, departments, personas, four reports, trends), so a few screens in a
+      // minute exhausted the budget and the page reported "Too many requests" (DecisionLog 44). 300/min still
+      // bounds a runaway client at five requests per second without capping ordinary dashboard browsing.
       windowMs: 60_000,
-      limit: 60,
+      limit: 300,
       standardHeaders: 'draft-7',
       legacyHeaders: false,
       keyGenerator: (req) => req.header('x-session-id') ?? (env.AUTH_DEV_BYPASS && !isProd ? req.header('x-dev-user') : undefined) ?? req.ip ?? 'anonymous',

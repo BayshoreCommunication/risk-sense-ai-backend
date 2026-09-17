@@ -31,6 +31,19 @@ describe('rate limits and security headers [SEC-04, NFR-03]', () => {
     expect((await request(app).get('/api/v1/reports/volume').set(other)).status).toBe(200);
   });
 
+  it('does not throttle one user browsing several dashboard screens in a minute [SEC-04]', async () => {
+    const h = await login('admin@paid.local');
+    // A /admin/reports view alone costs eight reads (shell /me, departments, personas, four reports, trends).
+    // Three screens' worth of mixed reads must stay inside the coarse per-caller backstop: the product must not
+    // rate-limit itself during ordinary browsing. Expensive routes keep their own tighter budgets.
+    for (let i = 0; i < 8; i++) {
+      expect((await request(app).get('/api/v1/me').set(h)).status).toBe(200);
+      expect((await request(app).get('/api/v1/personas').set(h)).status).toBe(200);
+      expect((await request(app).get('/api/v1/scenarios').set(h)).status).toBe(200);
+    }
+    expect((await request(app).get('/api/v1/me').set(h)).status).toBe(200);
+  });
+
   it('sets hardened headers and honours the CORS allowlist only', async () => {
     const res = await request(app).get('/api/v1/health');
     expect(res.headers['strict-transport-security']).toContain('max-age=63072000');
