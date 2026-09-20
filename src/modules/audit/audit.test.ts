@@ -1,6 +1,6 @@
 import request from 'supertest';
 import mongoose from 'mongoose';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { app, login, seeded } from '../../tests/helpers';
 import { GENESIS_HASH } from '../../lib/hash';
 import { AuditLogModel } from './model';
@@ -16,6 +16,8 @@ describe('audit hash chain', () => {
     const { tac } = await seeded();
     tenantId = String(tac._id);
   });
+
+  afterEach(() => vi.restoreAllMocks());
 
   it('links entries with prevHash starting from genesis and verifies ok [SEC-07]', async () => {
     const actor = { id: new mongoose.Types.ObjectId().toString(), role: 'system_administrator' };
@@ -108,5 +110,24 @@ describe('audit hash chain', () => {
     expect((await audit.verify(String(acme._id))).ok).toBe(true);
     const listed = await request(app).get('/api/v1/audit-logs/archive-manifests').set(sysadmin);
     expect(listed.body.data).toHaveLength(1);
+  });
+
+  it('rolls back an archive manifest when its audit evidence fails [FR-25, SEC-06, SEC-07]', async () => {
+    await audit.write({ tenantId, category: 'assessment', action: 'assessment.started', actor: null, entity: { type: 'assessment', id: 'archive-rollback' } });
+    const sysadmin = await login('sysadmin@dev.local');
+    const writeAudit = audit.write.bind(audit);
+    vi.spyOn(audit, 'write').mockImplementation(async (entry) => {
+      if (entry.action === 'audit.archive_created') throw new Error('forced archive audit failure');
+      return writeAudit(entry);
+    });
+    const response = await request(app)
+      .post('/api/v1/audit-logs/archive')
+      .set(sysadmin)
+      .send({ from: new Date(Date.now() - 60_000).toISOString(), to: new Date(Date.now() + 60_000).toISOString() });
+
+    expect(response.status).toBe(500);
+    expect(await AuditArchiveManifestModel.countDocuments({ tenantId })).toBe(0);
+    expect(await AuditLogModel.countDocuments({ tenantId, action: 'audit.archive_created' })).toBe(0);
+    expect(await AuditLogModel.countDocuments({ tenantId, action: 'assessment.started' })).toBe(1);
   });
 });

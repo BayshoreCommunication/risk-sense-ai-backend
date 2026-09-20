@@ -16,6 +16,7 @@ for (const bin of ['/opt/homebrew/bin/mongod', '/usr/local/bin/mongod']) {
 
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
+import { ensureRateLimitStoreReady } from '../modules/rate-limits/store';
 
 let mongod: MongoMemoryReplSet;
 
@@ -26,6 +27,7 @@ beforeAll(async () => {
   });
   process.env.MONGODB_URI = mongod.getUri();
   await mongoose.connect(process.env.MONGODB_URI);
+  await ensureRateLimitStoreReady();
 });
 
 beforeEach(async () => {

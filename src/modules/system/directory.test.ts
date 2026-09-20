@@ -7,7 +7,7 @@ import { PersonaModel } from '../personas/model';
 import { SessionModel } from '../auth/model';
 import { AuditLogModel } from '../audit/model';
 import { audit } from '../audit/service';
-import { TenantModel } from '../tenants/model';
+import { DepartmentModel, TenantModel } from '../tenants/model';
 import { UserModel } from '../users/model';
 import { directoryService } from './directory.service';
 import { DrStatusModel, FIXED_DR_TARGETS } from './dr.model';
@@ -121,6 +121,51 @@ describe('system directory administration [FR-02, FR-10, SEC-01]', () => {
     const list = await request(app).get('/api/v1/system/users').set(sysadmin);
     expect(list.body.data.some((user: { email: string }) => user.email === 'new.requestor@example.com')).toBe(true);
     expect((await request(app).get('/api/v1/system/users').set(await login('admin@dev.local'))).status).toBe(403);
+  });
+
+  it('rolls back directory creates when their audit evidence fails [FR-02, FR-10, FR-25, SEC-07]', async () => {
+    const sysadmin = await login('sysadmin@dev.local');
+    const writeAudit = audit.write.bind(audit);
+    let failAction = 'user.created';
+    const writeSpy = vi.spyOn(audit, 'write').mockImplementation(async (entry) => {
+      if (entry.action === failAction) throw new Error(`forced ${entry.action} audit failure`);
+      return writeAudit(entry);
+    });
+
+    const failedUser = await request(app).post('/api/v1/system/users').set(sysadmin).send({
+      email: 'atomic.create@example.com',
+      name: 'Atomic Create',
+      role: 'requestor',
+    });
+    expect(failedUser.status).toBe(500);
+    expect(await UserModel.countDocuments({ email: 'atomic.create@example.com' })).toBe(0);
+    expect(await AuditLogModel.countDocuments({ action: 'user.created', 'payload.email': 'atomic.create@example.com' })).toBe(0);
+
+    failAction = 'department.created';
+    const failedDepartment = await request(app)
+      .post('/api/v1/system/departments')
+      .set(sysadmin)
+      .send({ name: 'Atomic Department', personaIds: [] });
+    expect(failedDepartment.status).toBe(500);
+    expect(await DepartmentModel.countDocuments({ name: 'Atomic Department' })).toBe(0);
+    expect(await AuditLogModel.countDocuments({ action: 'department.created', 'payload.name': 'Atomic Department' })).toBe(0);
+    writeSpy.mockRestore();
+  });
+
+  it('rolls back tenant policy changes when their audit evidence fails [FR-25, SEC-02, SEC-07]', async () => {
+    const sysadmin = await login('sysadmin@dev.local');
+    const tenant = await TenantModel.findOne({ slug: 'tac' }).lean();
+    const writeAudit = audit.write.bind(audit);
+    const writeSpy = vi.spyOn(audit, 'write').mockImplementation(async (entry) => {
+      if (entry.action === 'tenant.updated') throw new Error('forced tenant audit failure');
+      return writeAudit(entry);
+    });
+
+    const failed = await request(app).patch('/api/v1/system/tenant').set(sysadmin).send({ name: 'Uncommitted Tenant Name' });
+    expect(failed.status).toBe(500);
+    expect((await TenantModel.findById(tenant!._id).lean())?.name).toBe(tenant!.name);
+    expect(await AuditLogModel.countDocuments({ action: 'tenant.updated' })).toBe(0);
+    writeSpy.mockRestore();
   });
 
   it('prevents self-lockout and rejects department scope on non-requestor roles', async () => {

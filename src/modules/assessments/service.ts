@@ -1,7 +1,8 @@
 import { Types, type PipelineStage } from 'mongoose';
+import { withMongoTransaction } from '../../lib/db';
 import { AppError, notFound } from '../../lib/errors';
 import type { AuthTenant, AuthUser } from '../../middleware/auth';
-import { getAi } from '../ai/service';
+import { getAi, type AiService } from '../ai/service';
 import { audit } from '../audit/service';
 import { UserModel } from '../users/model';
 import { classFor as classForSector, isPrivilegedReader, maskAssessmentView, maskAuditPayload, maskMessages, maskText } from '../../lib/sensitive';
@@ -162,106 +163,170 @@ async function escalationCandidates(user: AuthUser, tenant: AuthTenant, doc: Doc
   return users.map((u) => ({ _id: String(u._id), name: u.name, email: u.email, departmentIds: u.departmentIds.map(String), crossDepartmentAccess: u.crossDepartmentAccess }));
 }
 
+type ActivePersona = Awaited<ReturnType<typeof activePersonas>>[number];
+
+/**
+ * Model calls are prepared before opening a Mongo transaction. A transaction callback may be
+ * replayed after a transient database error, while an external inference call is neither short nor
+ * safely replayable. The selected content is pinned only later, inside the committing transaction.
+ */
+async function prepareScenarioSelection(contentTenant: string, persona: ActivePersona, text: string) {
+  const scenarios = await activeScenarios(contentTenant, persona.key);
+  if (scenarios.length === 0) throw new AppError('CONFLICT', `persona "${persona.key}" has no active scenarios`);
+  const picked = await getAi().selectScenario({
+    personaName: persona.name,
+    text,
+    scenarios: scenarios.map((scenario) => ({
+      key: scenario.key,
+      name: scenario.name,
+      description: scenario.description,
+      riskIndicators: scenario.riskIndicators,
+    })),
+  });
+  const inferred = picked.scenarioKey && picked.confidence >= SCENARIO_MIN_CONFIDENCE
+    ? scenarios.find((scenario) => scenario.key === picked.scenarioKey)
+    : undefined;
+  return {
+    contentTenant,
+    persona,
+    scenario: inferred ?? scenarios.find((scenario) => scenario.key === persona.defaultScenarioKey) ?? scenarios[0]!,
+    source: inferred ? ('ai' as const) : ('default' as const),
+    confidence: picked.confidence,
+  };
+}
+
+type PreparedScenarioSelection = Awaited<ReturnType<typeof prepareScenarioSelection>>;
+
 export const assessmentsService = {
   /** T-031/T-032: create the session; choose or infer the persona (FR-04). */
   async start(user: AuthUser, tenant: AuthTenant, body: StartBody) {
-    const ct = await contentTenantId(user.tenantId);
-    const allPersonas = await activePersonas(ct);
-    const personas = body.personaKey ? allPersonas : await activePersonasForUser(user, tenant, ct);
+    const contentTenant = await contentTenantId(user.tenantId);
+    const allPersonas = await activePersonas(contentTenant);
+    const personas = body.personaKey ? allPersonas : await activePersonasForUser(user, tenant, contentTenant);
     if (personas.length === 0) throw new AppError('CONFLICT', 'no active personas are configured yet');
     const ai = getAi();
-    const doc = new AssessmentModel({
-      tenantId: user.tenantId,
-      requestorId: user.id,
-      departmentId: user.departmentIds[0],
-      openingText: body.text?.trim(),
-      versions: { promptVersion: ai.promptVersion, aiProvider: ai.provider },
-    });
-    if (body.text) await say(doc, 'user', 'answer', body.text.trim());
-
-    if (body.personaKey) {
-      const p = allPersonas.find((x) => x.key === body.personaKey);
-      if (!p) throw new AppError('VALIDATION_ERROR', `persona "${body.personaKey}" is not active`);
-      doc.personaKey = p.key;
-      doc.personaSource = 'user';
-    } else {
-      const inferred = await ai.inferPersona({ text: body.text!, personas: personas.map((p) => ({ key: p.key, name: p.name, description: p.description, detectHints: p.detectHints })) });
-      const p = inferred.personaKey ? personas.find((x) => x.key === inferred.personaKey) : undefined;
-      if (p && inferred.confidence >= PERSONA_MIN_CONFIDENCE) {
-        doc.personaKey = p.key;
-        doc.personaSource = 'ai';
-        doc.personaCandidates = personas.map((x) => x.key) as never;
-        doc.phase = 'persona';
-        await say(doc, 'assistant', 'question', `It sounds like you work as a ${p.name}. Confirm this role or choose another before we continue.`, {
-          question: { key: '__persona', type: 'mcq', options: personas.map((x) => ({ id: x.key, label: x.name })) },
-        });
-      } else {
-        doc.personaCandidates = personas.map((x) => x.key) as never;
-        doc.phase = 'persona';
-        await say(doc, 'assistant', 'question', 'Which of these roles best describes you?', { question: { key: '__persona', type: 'mcq', options: personas.map((x) => ({ id: x.key, label: x.name })) } });
-      }
+    const chosenPersona = body.personaKey
+      ? allPersonas.find((persona) => persona.key === body.personaKey)
+      : undefined;
+    if (body.personaKey && !chosenPersona) {
+      throw new AppError('VALIDATION_ERROR', `persona "${body.personaKey}" is not active`);
     }
-    await doc.save();
-    await audit.write({
-      tenantId: user.tenantId,
-      category: 'assessment',
-      action: 'assessment.started',
-      actor: user,
-      entity: { type: 'assessment', id: String(doc._id) },
-      payload: auditPayload(tenant, { personaKey: doc.personaKey, personaSource: doc.personaSource, openingText: doc.openingText }, { personaKey: doc.personaKey }),
+    const inferred = body.personaKey
+      ? undefined
+      : await ai.inferPersona({
+          text: body.text!,
+          personas: personas.map((persona) => ({
+            key: persona.key,
+            name: persona.name,
+            description: persona.description,
+            detectHints: persona.detectHints,
+          })),
+        });
+    const scenarioSelection = chosenPersona && body.text
+      ? await prepareScenarioSelection(contentTenant, chosenPersona, body.text.trim())
+      : undefined;
+
+    return withMongoTransaction(async () => {
+      const doc = new AssessmentModel({
+        tenantId: user.tenantId,
+        requestorId: user.id,
+        departmentId: user.departmentIds[0],
+        openingText: body.text?.trim(),
+        versions: { promptVersion: ai.promptVersion, aiProvider: ai.provider },
+      });
+      if (body.text) await say(doc, 'user', 'answer', body.text.trim());
+
+      if (chosenPersona) {
+        doc.personaKey = chosenPersona.key;
+        doc.personaSource = 'user';
+      } else {
+        const proposed = inferred?.personaKey
+          ? personas.find((persona) => persona.key === inferred.personaKey)
+          : undefined;
+        doc.personaCandidates = personas.map((persona) => persona.key) as never;
+        doc.phase = 'persona';
+        if (proposed && inferred!.confidence >= PERSONA_MIN_CONFIDENCE) {
+          doc.personaKey = proposed.key;
+          doc.personaSource = 'ai';
+          await say(doc, 'assistant', 'question', `It sounds like you work as a ${proposed.name}. Confirm this role or choose another before we continue.`, {
+            question: { key: '__persona', type: 'mcq', options: personas.map((persona) => ({ id: persona.key, label: persona.name })) },
+          });
+        } else {
+          await say(doc, 'assistant', 'question', 'Which of these roles best describes you?', {
+            question: { key: '__persona', type: 'mcq', options: personas.map((persona) => ({ id: persona.key, label: persona.name })) },
+          });
+        }
+      }
+      await doc.save();
+      await audit.write({
+        tenantId: user.tenantId,
+        category: 'assessment',
+        action: 'assessment.started',
+        actor: user,
+        entity: { type: 'assessment', id: String(doc._id) },
+        payload: auditPayload(tenant, { personaKey: doc.personaKey, personaSource: doc.personaSource, openingText: doc.openingText }, { personaKey: doc.personaKey }),
+      });
+      // An AI proposal is never treated as consent: pause so the requestor can confirm or override it (FR-04).
+      if (doc.personaKey && doc.personaSource === 'user') {
+        return this.afterPersona(doc, user, tenant, scenarioSelection);
+      }
+      return this.view(doc);
     });
-    // An AI proposal is never treated as consent: pause so the requestor can confirm or override it (FR-04).
-    if (doc.personaKey && doc.personaSource === 'user') return this.afterPersona(doc, user, tenant);
-    return this.view(doc);
   },
 
   /** FR-04: manual choice or override of the AI proposal (only before the questions phase). */
   async setPersona(user: AuthUser, tenant: AuthTenant, id: string, personaKey: string) {
-    const doc = await loadOwnedForIntake(user, id);
-    if (doc.phase === 'questions' || doc.phase === 'done') throw new AppError('CONFLICT', 'the persona cannot change once questions have started');
-    const ct = await contentTenantId(user.tenantId);
-    const p = (await activePersonas(ct)).find((x) => x.key === personaKey);
-    if (!p) throw new AppError('VALIDATION_ERROR', `persona "${personaKey}" is not active`);
-    doc.personaKey = p.key;
-    doc.personaSource = 'user';
-    doc.personaCandidates = [] as never;
-    await say(doc, 'user', 'answer', p.name);
-    await audit.write({ tenantId: user.tenantId, category: 'assessment', action: 'assessment.persona_set', actor: user, entity: { type: 'assessment', id }, payload: { personaKey } });
-    return this.afterPersona(doc, user, tenant);
+    const snapshot = await loadOwnedForIntake(user, id);
+    if (snapshot.phase === 'questions' || snapshot.phase === 'done') {
+      throw new AppError('CONFLICT', 'the persona cannot change once questions have started');
+    }
+    const contentTenant = await contentTenantId(user.tenantId);
+    const persona = (await activePersonas(contentTenant)).find((candidate) => candidate.key === personaKey);
+    if (!persona) throw new AppError('VALIDATION_ERROR', `persona "${personaKey}" is not active`);
+    const scenarioSelection = snapshot.openingText
+      ? await prepareScenarioSelection(contentTenant, persona, snapshot.openingText)
+      : undefined;
+
+    return withMongoTransaction(async () => {
+      const doc = await loadOwnedForIntake(user, id);
+      if (doc.phase === 'questions' || doc.phase === 'done') {
+        throw new AppError('CONFLICT', 'the persona cannot change once questions have started');
+      }
+      doc.personaKey = persona.key;
+      doc.personaSource = 'user';
+      doc.personaCandidates = [] as never;
+      await say(doc, 'user', 'answer', persona.name);
+      await audit.write({ tenantId: user.tenantId, category: 'assessment', action: 'assessment.persona_set', actor: user, entity: { type: 'assessment', id }, payload: { personaKey } });
+      return this.afterPersona(doc, user, tenant, scenarioSelection);
+    });
   },
 
   /** Persona known → pick the scenario from the opening text, or ask for a description first (FR-05). */
-  async afterPersona(doc: Doc, user: AuthUser, tenant: AuthTenant) {
+  async afterPersona(
+    doc: Doc,
+    user: AuthUser,
+    tenant: AuthTenant,
+    prepared?: PreparedScenarioSelection,
+  ) {
     if (!doc.openingText) {
       doc.phase = 'describe';
       await say(doc, 'assistant', 'question', 'Please describe what happened, in your own words.', { question: { key: '__describe', type: 'free_text' } });
       await doc.save();
       return this.view(doc);
     }
-    return this.selectScenarioAndBegin(doc, user, tenant, doc.openingText);
+    if (!prepared || prepared.persona.key !== doc.personaKey) {
+      throw new AppError('CONFLICT', 'scenario selection is stale; retry the request');
+    }
+    return this.selectScenarioAndBegin(doc, user, tenant, prepared);
   },
 
-  async selectScenarioAndBegin(doc: Doc, user: AuthUser, tenant: AuthTenant, text: string) {
-    const ct = await contentTenantId(user.tenantId);
-    const persona = (await activePersonas(ct)).find((p) => p.key === doc.personaKey)!;
-    const scenarios = await activeScenarios(ct, persona.key);
-    if (scenarios.length === 0) throw new AppError('CONFLICT', `persona "${persona.key}" has no active scenarios`);
-    const picked = await getAi().selectScenario({
-      personaName: persona.name,
-      text,
-      scenarios: scenarios.map((s) => ({ key: s.key, name: s.name, description: s.description, riskIndicators: s.riskIndicators })),
-    });
-    let scenario = picked.scenarioKey && picked.confidence >= SCENARIO_MIN_CONFIDENCE ? scenarios.find((s) => s.key === picked.scenarioKey) : undefined;
-    let source: 'ai' | 'default' = 'ai';
-    if (!scenario) {
-      scenario = scenarios.find((s) => s.key === persona.defaultScenarioKey) ?? scenarios[0]!;
-      source = 'default';
-    }
+  async selectScenarioAndBegin(doc: Doc, user: AuthUser, tenant: AuthTenant, prepared: PreparedScenarioSelection) {
+    const { contentTenant, persona, scenario, source, confidence } = prepared;
     doc.scenarioKey = scenario.key;
     doc.scenarioSource = source;
     doc.sector = persona.sector;
     // Never spread a Mongoose subdocument back into itself (circular getters); set a plain object.
-    const pinned = await pinVersions(ct, persona as never, scenario as never, persona.sector);
+    const pinned = await pinVersions(contentTenant, persona as never, scenario as never, persona.sector);
     doc.set('versions', { promptVersion: doc.versions?.promptVersion, aiProvider: doc.versions?.aiProvider, ...pinned.versions });
     doc.set('pinnedContent', pinned.pinnedContent);
     doc.queue = initialQueue(scenario.conversationFlow as FlowNode[]) as never;
@@ -275,113 +340,161 @@ export const assessmentsService = {
       action: 'assessment.scenario_selected',
       actor: user,
       entity: { type: 'assessment', id: String(doc._id) },
-      payload: { scenarioKey: scenario.key, source, confidence: picked.confidence, versions: doc.versions },
+      payload: { scenarioKey: scenario.key, source, confidence, versions: doc.versions },
     });
     return { ...(await this.view(doc)), ...step };
   },
 
   /** T-035/T-036: one turn of the intake. */
   async answer(user: AuthUser, tenant: AuthTenant, id: string, body: MessageBody) {
-    const doc = await loadOwnedForIntake(user, id);
-    if (doc.status !== 'in_progress') throw new AppError('CONFLICT', `assessment is ${doc.status}`);
+    const snapshot = await loadOwnedForIntake(user, id);
+    if (snapshot.status !== 'in_progress') throw new AppError('CONFLICT', `assessment is ${snapshot.status}`);
 
-    if (doc.phase === 'persona') {
+    if (snapshot.phase === 'persona') {
       const key = String(body.value ?? body.text ?? '');
       return this.setPersona(user, tenant, id, key);
     }
-    if (doc.phase === 'describe') {
+    if (snapshot.phase === 'describe') {
       const text = String(body.text ?? body.value ?? '').trim();
       if (text.length < 10) throw new AppError('VALIDATION_ERROR', 'please describe the incident in a few words');
-      doc.openingText = text;
-      await say(doc, 'user', 'answer', text);
-      return this.selectScenarioAndBegin(doc, user, tenant, text);
-    }
-
-    const ctx = await flowContext(doc);
-    const key = body.questionKey ?? doc.currentQuestionKey;
-    if (!key) throw new AppError('CONFLICT', 'no question is pending');
-    if (key !== doc.currentQuestionKey) throw new AppError('CONFLICT', `the pending question is "${doc.currentQuestionKey}"`);
-    const q = ctx.questions.get(key);
-    if (!q) throw new AppError('CONFLICT', 'question is no longer active');
-
-    const raw = body.value ?? body.text!;
-    let branchValue: unknown;
-    if (q.type === 'free_text' || (body.value === undefined && body.text)) {
-      // Free text (or a typed answer to a structured question): the model maps it to facts (FR-06). Never scores.
-      const extracted = await getAi().extractFacts({
-        question: { key: q.key, text: q.text, factKey: q.factKey, type: q.type },
-        answer: String(raw),
-        factCatalog: [...ctx.questions.values()].map((x) => ({ key: x.factKey, hint: x.text })),
-        vocabulary: [...(doc.pinnedContent?.personaVocabulary ?? [])],
+      const contentTenant = await contentTenantId(user.tenantId);
+      const persona = (await activePersonas(contentTenant)).find((candidate) => candidate.key === snapshot.personaKey);
+      if (!persona) throw new AppError('CONFLICT', 'the selected persona is no longer active; restart the intake');
+      const prepared = await prepareScenarioSelection(contentTenant, persona, text);
+      return withMongoTransaction(async () => {
+        const doc = await loadOwnedForIntake(user, id);
+        if (doc.status !== 'in_progress' || doc.phase !== 'describe' || doc.personaKey !== snapshot.personaKey) {
+          throw new AppError('CONFLICT', 'the assessment changed while the scenario was selected; retry the request');
+        }
+        doc.openingText = text;
+        await say(doc, 'user', 'answer', text);
+        return this.selectScenarioAndBegin(doc, user, tenant, prepared);
       });
-      doc.answers.push({ questionKey: q.key, text: String(raw), answeredAt: new Date() } as never);
-      await say(doc, 'user', 'answer', String(raw), { questionKey: q.key });
-      const known = new Set([...ctx.questions.values()].map((x) => x.factKey));
-      // Side facts the answer clearly stated (only catalogued keys, FR-30). They may only FILL gaps:
-      // never overwrite a fact that already exists (a clicked MCQ/yes-no/number answer beats a model guess),
-      // never accept placeholders, never accept low confidence.
-      for (const f of extracted.facts) {
-        if (f.key === q.factKey || !known.has(f.key)) continue;
-        if (doc.facts.some((x) => x.key === f.key)) continue;
-        if (f.confidence < LOW_CONFIDENCE || isPlaceholder(f.value)) continue;
-        setFact(doc, { key: f.key, value: f.value, source: 'ai', questionKey: q.key, confidence: f.confidence, evidence: f.evidence });
-      }
-      // The asked fact is "settled" when it was extracted, fits the question type and is not low-confidence.
-      const asked = extracted.facts.find((f) => f.key === q.factKey);
-      const coerced = asked ? (q.type !== 'free_text' ? structuredValue(q, asked.value) : { ok: true as const, value: asked.value }) : null;
-      const settled = Boolean(asked && coerced?.ok && asked.confidence >= 0.5);
-      if (!settled && !doc.clarification) {
-        // Ask once for clarification; the question stays current (FR-06: flag, do not drop).
-        doc.clarification = extracted.clarification ?? `Could you clarify: ${q.text}`;
-        await say(doc, 'assistant', 'clarification', doc.clarification, { questionKey: q.key, question: questionSnapshot(q) });
-        await doc.save();
-        return { ...(await this.view(doc)), nextQuestion: questionSnapshot(q), intakeComplete: false, missingRequired: [] as string[] };
-      }
-      const value = coerced && coerced.ok ? coerced.value : (asked?.value ?? String(raw));
-      setFact(doc, { key: q.factKey, value, source: 'ai', questionKey: q.key, confidence: settled ? asked!.confidence : Math.min(asked?.confidence ?? 0.3, 0.4), evidence: String(raw) });
-      branchValue = value;
-    } else {
-      const sv = structuredValue(q, raw);
-      if (!sv.ok) throw new AppError('VALIDATION_ERROR', sv.error);
-      doc.answers.push({ questionKey: q.key, value: raw, answeredAt: new Date() } as never);
-      const label = q.type === 'mcq' ? (q.options.find((o) => o.id === raw || o.factValue === raw)?.label ?? String(raw)) : q.type === 'yes_no' ? (sv.value ? 'Yes' : 'No') : String(sv.value);
-      await say(doc, 'user', 'answer', label, { questionKey: q.key });
-      setFact(doc, { key: q.factKey, value: sv.value, source: 'mcq', questionKey: q.key, confidence: 1 });
-      branchValue = sv.value;
     }
-    doc.clarification = undefined;
-    doc.askedQuestionKeys.push(q.key);
-    const { queue, branched } = applyBranch({ question: q, value: branchValue, queue: doc.queue, asked: doc.askedQuestionKeys });
-    doc.queue = queue as never;
-    const step = await advance(doc, ctx);
-    await doc.save();
-    await audit.write({
-      tenantId: user.tenantId,
-      category: 'assessment',
-      action: 'assessment.answered',
-      actor: user,
-      entity: { type: 'assessment', id },
-      payload: auditPayload(tenant, { questionKey: q.key, answer: raw, facts: doc.facts.filter((f) => f.questionKey === q.key), branched }, { questionKey: q.key, branched: branched.length }),
+
+    const snapshotContext = await flowContext(snapshot);
+    const key = body.questionKey ?? snapshot.currentQuestionKey;
+    if (!key) throw new AppError('CONFLICT', 'no question is pending');
+    if (key !== snapshot.currentQuestionKey) throw new AppError('CONFLICT', `the pending question is "${snapshot.currentQuestionKey}"`);
+    const snapshotQuestion = snapshotContext.questions.get(key);
+    if (!snapshotQuestion) throw new AppError('CONFLICT', 'question is no longer active');
+    const raw = body.value ?? body.text!;
+    const needsExtraction = snapshotQuestion.type === 'free_text' || (body.value === undefined && Boolean(body.text));
+    const extracted: Awaited<ReturnType<AiService['extractFacts']>> | undefined = needsExtraction
+      ? await getAi().extractFacts({
+          question: {
+            key: snapshotQuestion.key,
+            text: snapshotQuestion.text,
+            factKey: snapshotQuestion.factKey,
+            type: snapshotQuestion.type,
+          },
+          answer: String(raw),
+          factCatalog: [...snapshotContext.questions.values()].map((question) => ({ key: question.factKey, hint: question.text })),
+          vocabulary: [...(snapshot.pinnedContent?.personaVocabulary ?? [])],
+        })
+      : undefined;
+
+    return withMongoTransaction(async () => {
+      const doc = await loadOwnedForIntake(user, id);
+      if (doc.status !== 'in_progress') throw new AppError('CONFLICT', `assessment is ${doc.status}`);
+      if (doc.phase !== 'questions' || doc.currentQuestionKey !== key) {
+        throw new AppError('CONFLICT', 'the pending question changed while the answer was prepared; retry the request');
+      }
+      const ctx = await flowContext(doc);
+      const q = ctx.questions.get(key);
+      if (!q) throw new AppError('CONFLICT', 'question is no longer active');
+
+      let branchValue: unknown;
+      if (needsExtraction) {
+        // Free text (or a typed answer to a structured question): the model maps it to facts (FR-06). Never scores.
+        if (!extracted) throw new AppError('CONFLICT', 'the prepared extraction is unavailable; retry the request');
+        doc.answers.push({ questionKey: q.key, text: String(raw), answeredAt: new Date() } as never);
+        await say(doc, 'user', 'answer', String(raw), { questionKey: q.key });
+        const known = new Set([...ctx.questions.values()].map((question) => question.factKey));
+        // Side facts the answer clearly stated (only catalogued keys, FR-30). They may only FILL gaps:
+        // never overwrite a fact that already exists (a clicked MCQ/yes-no/number answer beats a model guess),
+        // never accept placeholders, never accept low confidence.
+        for (const fact of extracted.facts) {
+          if (fact.key === q.factKey || !known.has(fact.key)) continue;
+          if (doc.facts.some((existing) => existing.key === fact.key)) continue;
+          if (fact.confidence < LOW_CONFIDENCE || isPlaceholder(fact.value)) continue;
+          setFact(doc, { key: fact.key, value: fact.value, source: 'ai', questionKey: q.key, confidence: fact.confidence, evidence: fact.evidence });
+        }
+        // The asked fact is "settled" when it was extracted, fits the question type and is not low-confidence.
+        const asked = extracted.facts.find((fact) => fact.key === q.factKey);
+        const coerced = asked
+          ? (q.type !== 'free_text' ? structuredValue(q, asked.value) : { ok: true as const, value: asked.value })
+          : null;
+        const settled = Boolean(asked && coerced?.ok && asked.confidence >= 0.5);
+        if (!settled && !doc.clarification) {
+          // Ask once for clarification; the question stays current (FR-06: flag, do not drop).
+          doc.clarification = extracted.clarification ?? `Could you clarify: ${q.text}`;
+          await say(doc, 'assistant', 'clarification', doc.clarification, { questionKey: q.key, question: questionSnapshot(q) });
+          await doc.save();
+          await audit.write({
+            tenantId: user.tenantId,
+            category: 'assessment',
+            action: 'assessment.answered',
+            actor: user,
+            entity: { type: 'assessment', id },
+            payload: auditPayload(
+              tenant,
+              { questionKey: q.key, answer: raw, facts: doc.facts.filter((fact) => fact.questionKey === q.key), branched: [], settled: false, clarification: true },
+              { questionKey: q.key, branched: 0, settled: false },
+            ),
+          });
+          return { ...(await this.view(doc)), nextQuestion: questionSnapshot(q), intakeComplete: false, missingRequired: [] as string[] };
+        }
+        const value = coerced && coerced.ok ? coerced.value : (asked?.value ?? String(raw));
+        setFact(doc, { key: q.factKey, value, source: 'ai', questionKey: q.key, confidence: settled ? asked!.confidence : Math.min(asked?.confidence ?? 0.3, 0.4), evidence: String(raw) });
+        branchValue = value;
+      } else {
+        const structured = structuredValue(q, raw);
+        if (!structured.ok) throw new AppError('VALIDATION_ERROR', structured.error);
+        doc.answers.push({ questionKey: q.key, value: raw, answeredAt: new Date() } as never);
+        const label = q.type === 'mcq'
+          ? (q.options.find((option) => option.id === raw || option.factValue === raw)?.label ?? String(raw))
+          : q.type === 'yes_no'
+            ? (structured.value ? 'Yes' : 'No')
+            : String(structured.value);
+        await say(doc, 'user', 'answer', label, { questionKey: q.key });
+        setFact(doc, { key: q.factKey, value: structured.value, source: 'mcq', questionKey: q.key, confidence: 1 });
+        branchValue = structured.value;
+      }
+
+      doc.clarification = undefined;
+      doc.askedQuestionKeys.push(q.key);
+      const { queue, branched } = applyBranch({ question: q, value: branchValue, queue: doc.queue, asked: doc.askedQuestionKeys });
+      doc.queue = queue as never;
+      const step = await advance(doc, ctx);
+      await doc.save();
+      await audit.write({
+        tenantId: user.tenantId,
+        category: 'assessment',
+        action: 'assessment.answered',
+        actor: user,
+        entity: { type: 'assessment', id },
+        payload: auditPayload(tenant, { questionKey: q.key, answer: raw, facts: doc.facts.filter((fact) => fact.questionKey === q.key), branched }, { questionKey: q.key, branched: branched.length }),
+      });
+      return { ...(await this.view(doc)), ...step };
     });
-    return { ...(await this.view(doc)), ...step };
   },
 
   /** T-054: rules → scoring → explanation. Only after intake is complete (FR-08). */
   async submit(user: AuthUser, tenant: AuthTenant, id: string) {
-    const doc = await loadOwnedForIntake(user, id);
-    if (doc.status !== 'intake_complete') throw new AppError('MISSING_REQUIRED_FACTS', `assessment is ${doc.status}; finish the intake first`);
-    const ctx = await flowContext(doc);
-    const facts = factsOf(doc);
+    const snapshot = await loadOwnedForIntake(user, id);
+    if (snapshot.status !== 'intake_complete') {
+      throw new AppError('MISSING_REQUIRED_FACTS', `assessment is ${snapshot.status}; finish the intake first`);
+    }
+    const ctx = await flowContext(snapshot);
+    const facts = factsOf(snapshot);
     const missing = missingRequired(ctx.scenario.requiredFactKeys, facts);
     if (missing.length) throw new AppError('MISSING_REQUIRED_FACTS', `missing required facts: ${missing.join(', ')}`, { missing });
 
-    const matrix = await pinnedMatrix(doc, ctx.ct);
-    const rules = restorePinnedRules(doc.pinnedContent?.rules, doc.versions?.rulesHash);
-    const factConfidences = Object.fromEntries(doc.facts.map((f) => [f.key, f.confidence]));
+    const matrix = await pinnedMatrix(snapshot, ctx.ct);
+    const rules = restorePinnedRules(snapshot.pinnedContent?.rules, snapshot.versions?.rulesHash);
+    const factConfidences = Object.fromEntries(snapshot.facts.map((fact) => [fact.key, fact.confidence]));
     const r = simulate({ matrix, rules, facts, requiredFactKeys: ctx.scenario.requiredFactKeys, factConfidences });
-    await audit.write({ tenantId: user.tenantId, category: 'assessment', action: 'assessment.rules_evaluated', actor: user, entity: { type: 'assessment', id }, payload: auditPayload(tenant, { fired: r.rule?.fired ?? [], winner: r.rule?.ruleKey ?? null }, { fired: r.rule?.fired.length ?? 0 }) });
-    await audit.write({ tenantId: user.tenantId, category: 'assessment', action: 'assessment.scored', actor: user, entity: { type: 'assessment', id }, payload: auditPayload(tenant, { score: r.score, computedClassification: r.computedClassification, factors: r.factors, matrix: doc.versions?.matrix }, { score: r.score, classification: r.classification }) });
-
     const rule = r.rule ? rules.find((x) => x.id === r.rule!.ruleId) : undefined;
     const explanation = await getAi().explain({
       classification: r.classification,
@@ -395,39 +508,48 @@ export const assessmentsService = {
         points: Math.round(f.contribution * 10) / 10,
         matched: f.matchedMapping === null ? null : conditionText(matrix.factors[k as keyof MatrixLike['factors']].mapping[f.matchedMapping]?.when),
       })),
-      facts: doc.facts.map((f) => ({ key: f.key, value: f.value })),
+      facts: snapshot.facts.map((fact) => ({ key: fact.key, value: fact.value })),
       reasoningExample: ctx.scenario.reasoningExample ?? null,
     });
     const actions = (ctx.scenario.recommendedActions as Record<string, { decisionRecommendation?: string; nextSteps?: string[] } | undefined> | undefined)?.[r.classification];
     const recommendedAction = r.professionalConsult ? 'Further Professional Risk Guidance Needed' : (rule?.forcedAction ?? actions?.decisionRecommendation ?? 'Manage the Risk');
 
-    doc.result = {
-      score: r.score,
-      classification: r.classification,
-      computedClassification: r.computedClassification,
-      ruleDriven: r.ruleDriven,
-      ruleKey: r.rule?.ruleKey,
-      ruleName: r.rule?.ruleName,
-      confidence: r.confidence,
-      professionalConsult: r.professionalConsult,
-      mandatoryReview: r.mandatoryReview,
-      explanation: explanation.explanation,
-      keyDrivers: explanation.keyDrivers,
-      recommendedAction,
-      nextSteps: actions?.nextSteps ?? [],
-      factors: r.factors,
-      computedAt: new Date(),
-    } as never;
-    doc.status = r.errorReview ? 'error_review' : 'awaiting_decision';
-    doc.timing!.submittedAt = new Date();
-    await say(doc, 'assistant', 'result', explanation.explanation);
-    await doc.save();
-    await audit.write({ tenantId: user.tenantId, category: 'assessment', action: 'assessment.recommended', actor: user, entity: { type: 'assessment', id }, payload: auditPayload(tenant, { classification: r.classification, ruleDriven: r.ruleDriven, confidence: r.confidence, recommendedAction, explanation: explanation.explanation }, { classification: r.classification, confidence: r.confidence }) });
-    return this.view(doc);
+    return withMongoTransaction(async () => {
+      const doc = await loadOwnedForIntake(user, id);
+      if (doc.status !== 'intake_complete') {
+        throw new AppError('CONFLICT', `assessment is ${doc.status}; the prepared result is stale`);
+      }
+      await audit.write({ tenantId: user.tenantId, category: 'assessment', action: 'assessment.rules_evaluated', actor: user, entity: { type: 'assessment', id }, payload: auditPayload(tenant, { fired: r.rule?.fired ?? [], winner: r.rule?.ruleKey ?? null }, { fired: r.rule?.fired.length ?? 0 }) });
+      await audit.write({ tenantId: user.tenantId, category: 'assessment', action: 'assessment.scored', actor: user, entity: { type: 'assessment', id }, payload: auditPayload(tenant, { score: r.score, computedClassification: r.computedClassification, factors: r.factors, matrix: doc.versions?.matrix }, { score: r.score, classification: r.classification }) });
+      doc.result = {
+        score: r.score,
+        classification: r.classification,
+        computedClassification: r.computedClassification,
+        ruleDriven: r.ruleDriven,
+        ruleKey: r.rule?.ruleKey,
+        ruleName: r.rule?.ruleName,
+        confidence: r.confidence,
+        professionalConsult: r.professionalConsult,
+        mandatoryReview: r.mandatoryReview,
+        explanation: explanation.explanation,
+        keyDrivers: explanation.keyDrivers,
+        recommendedAction,
+        nextSteps: actions?.nextSteps ?? [],
+        factors: r.factors,
+        computedAt: new Date(),
+      } as never;
+      doc.status = r.errorReview ? 'error_review' : 'awaiting_decision';
+      doc.timing!.submittedAt = new Date();
+      await say(doc, 'assistant', 'result', explanation.explanation);
+      await doc.save();
+      await audit.write({ tenantId: user.tenantId, category: 'assessment', action: 'assessment.recommended', actor: user, entity: { type: 'assessment', id }, payload: auditPayload(tenant, { classification: r.classification, ruleDriven: r.ruleDriven, confidence: r.confidence, recommendedAction, explanation: explanation.explanation }, { classification: r.classification, confidence: r.confidence }) });
+      return this.view(doc);
+    });
   },
 
   /** T-060: the human decision. The only path that can close an assessment (AI-01, FR-22, FR-23). */
   async decide(user: AuthUser, tenant: AuthTenant, id: string, body: DecisionBody) {
+    return withMongoTransaction(async () => {
     const doc = await loadDecidableFor(user, tenant, id);
     if (!['awaiting_decision', 'escalated', 'error_review'].includes(doc.status)) throw new AppError('CONFLICT', `assessment is ${doc.status}`);
     if (doc.status === 'error_review' && body.type === 'accept') throw new AppError('DECISION_REQUIRED', 'a score of 0 cannot be accepted; override with a classification or escalate (FR-18)');
@@ -458,6 +580,7 @@ export const assessmentsService = {
       payload: { type: body.type, overriddenTo: body.overriddenTo ?? null, escalatedToUserId: target?._id ?? null, aiClassification: doc.result?.classification ?? null, ...(tenant.features.fullAudit ? { reason: body.reason ?? null } : {}) },
     });
     return this.view(doc);
+    });
   },
 
   /**

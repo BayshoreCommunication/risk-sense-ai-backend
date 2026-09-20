@@ -1,6 +1,7 @@
 import { Types } from 'mongoose';
 import type { z } from 'zod';
 import { AppError } from '../../lib/errors';
+import { withMongoTransaction } from '../../lib/db';
 import { versioned, type VersionedDoc } from '../../lib/versioned';
 import type { AuthUser } from '../../middleware/auth';
 import { audit } from '../audit/service';
@@ -10,6 +11,7 @@ import { CLASSIFICATIONS, type Classification } from '../shared/enums';
 import { simulate, type MatrixLike, type ScoreResult } from './compute';
 import { FACTOR_KEYS, ScoringMatrixModel, type FactorKey } from './model';
 import { MatrixBody, type MatrixListQuery, type MatrixPatch, type SimulateBody } from './schema';
+import { assertConfiguredSectors, guardConfiguredSectorReferences } from '../tenants/sectors';
 
 /** Activation requires an approval record from someone other than the author (AI-05). */
 async function validateForActivation(doc: VersionedDoc) {
@@ -32,9 +34,17 @@ export const scoringService = {
     return ScoringMatrixModel.find(filter).sort({ key: 1, version: -1 }).lean();
   },
   get: (tenantId: string, id: string) => v.load(tenantId, id),
-  create: (tenantId: string, body: MatrixBody, actor: AuthUser) => v.createDraft(tenantId, body, actor),
+  async create(tenantId: string, body: MatrixBody, actor: AuthUser) {
+    return withMongoTransaction(async () => {
+      await guardConfiguredSectorReferences(tenantId, [body.sector]);
+      return v.createDraft(tenantId, body, actor);
+    });
+  },
   /** Editing transfers maker identity to the latest editor and clears approval (AI-05). */
   async update(tenantId: string, id: string, patch: z.infer<typeof MatrixPatch>, actor: AuthUser) {
+    return withMongoTransaction(async () => {
+    const current = await v.load(tenantId, id);
+    await guardConfiguredSectorReferences(tenantId, [patch.sector ?? current.sector]);
     const doc = await v.updateAsNewVersion(
       tenantId,
       id,
@@ -48,8 +58,10 @@ export const scoringService = {
       await doc.save();
     }
     return doc;
+    });
   },
   async approve(tenantId: string, id: string, approver: AuthUser, changeRef: string) {
+    return withMongoTransaction(async () => {
     const doc = await v.load(tenantId, id);
     if (doc.status !== 'draft') throw new AppError('CONFLICT', `matrix version is ${doc.status}; only drafts can be approved`);
     if (String(doc.createdBy) === approver.id) throw new AppError('SELF_APPROVAL', 'a scoring matrix must be approved by an administrator other than its author (AI-05/AI-06)');
@@ -59,6 +71,7 @@ export const scoringService = {
     await doc.save();
     await audit.write({ tenantId, category: 'config', action: 'scoring_matrix.approved', actor: approver, entity: { type: 'scoring_matrix', id, version: doc.version }, payload: { changeRef } });
     return doc;
+    });
   },
   activate: (tenantId: string, id: string, actor: AuthUser) => v.activate(tenantId, id, actor),
   deactivate: (tenantId: string, id: string, actor: AuthUser) => v.deactivate(tenantId, id, actor),
@@ -75,6 +88,7 @@ export const scoringService = {
 
   /** FR-18 documented test set + admin "what if": runs the exact production functions. */
   async simulate(tenantId: string, body: SimulateBody): Promise<ScoreResult & { matrix: { id: string; key: string; version: number } }> {
+    await assertConfiguredSectors(tenantId, [body.sector]);
     const matrix = body.matrixId ? await v.load(tenantId, body.matrixId) : await this.currentMatrix(tenantId, body.sector);
     if (!matrix) throw new AppError('NOT_FOUND', 'no active scoring matrix; create and activate one (or upload the scoring sheet)');
     const rules = body.includeRules ? await rulesService.activeRules(tenantId, body.sector) : [];

@@ -6,6 +6,7 @@ import { verifyIdToken } from '../lib/firebase';
 import { UserModel, type Role } from '../modules/users/model';
 import { assertRoleAllowedForPlan } from '../modules/users/plan-policy';
 import { usersService } from '../modules/users/service';
+import { allowsNonProductionDemoShortcut } from '../modules/auth/policy';
 import { TenantModel, type TenantFeatures, type TenantPlan } from '../modules/tenants/model';
 
 export interface AuthUser {
@@ -27,6 +28,7 @@ export interface AuthTenant {
   slug: string;
   plan: TenantPlan;
   features: TenantFeatures;
+  sectors: string[];
   sessionPolicy: { idleTimeoutMin: number; maxConcurrentSessions: number };
   authPolicy: { otpRequired: boolean };
   sso: { providerId: string | null; domain: string | null }; // FR-03
@@ -82,12 +84,9 @@ export const authenticate: RequestHandler = async (req, _res, next) => {
   assertRoleAllowedForPlan(tenant.plan, user.role);
 
   // FR-03: paid requestors/administrators must authenticate through the tenant's configured IdP.
-  // Demo accounts on paid tenants authenticate with password and complete the RiskSense-controlled OTP factor.
-  const isDemoAccount =
-    user.email.endsWith('@dev.local') ||
-    user.email.endsWith('@paid.local') ||
-    user.email.endsWith('@tac.local') ||
-    user.email.includes('.demo@');
+  // Seeded demo accounts may use password only outside production. An email naming convention is
+  // never a production SSO exemption (FR-01, SEC-03).
+  const isDemoAccount = allowsNonProductionDemoShortcut(user.email);
   const paidSsoRole = user.role === 'requestor' || user.role === 'administrator';
   if (header && tenant.plan === 'paid' && paidSsoRole && !isDemoAccount) {
     const providerId = tenant.features.sso ? tenant.sso?.providerId : null;
@@ -119,6 +118,7 @@ export const authenticate: RequestHandler = async (req, _res, next) => {
     slug: tenant.slug,
     plan: tenant.plan,
     features: tenant.features,
+    sectors: tenant.sectors,
     sessionPolicy: {
       idleTimeoutMin: tenant.sessionPolicy?.idleTimeoutMin ?? 15,
       maxConcurrentSessions: tenant.sessionPolicy?.maxConcurrentSessions ?? 1,

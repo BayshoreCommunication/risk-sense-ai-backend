@@ -14,6 +14,7 @@ import mongoose from 'mongoose';
 import { createApp } from '../src/app';
 import { connectDb } from '../src/lib/db';
 import { logger } from '../src/lib/logger';
+import { ensureRateLimitStoreReady } from '../src/modules/rate-limits/store';
 
 const app = createApp();
 
@@ -27,10 +28,12 @@ mongoose.connection.on('error', (err) => logger.error({ err }, 'mongo connection
 let connecting: Promise<unknown> | null = null;
 function ready(): Promise<unknown> {
   if (!connecting) {
-    connecting = connectDb().catch((err) => {
-      connecting = null;
-      throw err;
-    });
+    connecting = connectDb()
+      .then(() => ensureRateLimitStoreReady())
+      .catch((err) => {
+        connecting = null;
+        throw err;
+      });
   }
   return connecting;
 }

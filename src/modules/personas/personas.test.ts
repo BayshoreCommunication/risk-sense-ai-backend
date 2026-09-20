@@ -1,8 +1,9 @@
 import request from 'supertest';
 import { Types } from 'mongoose';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { app, login, seeded } from '../../tests/helpers';
 import { AuditLogModel } from '../audit/model';
+import { audit } from '../audit/service';
 import { PersonaModel } from './model';
 import { DepartmentModel, TenantModel } from '../tenants/model';
 import { UserModel } from '../users/model';
@@ -27,6 +28,8 @@ describe('personas (FR-09, versioning)', () => {
     requestor = await login('requestor@tac.local');
   });
 
+  afterEach(() => vi.restoreAllMocks());
+
   it('administrator creates a draft; requestor cannot create [SEC-01]', async () => {
     const denied = await request(app).post('/api/v1/personas').set(requestor).send(persona);
     expect(denied.status).toBe(403);
@@ -36,10 +39,55 @@ describe('personas (FR-09, versioning)', () => {
     expect(await AuditLogModel.countDocuments({ action: 'persona.created' })).toBe(1);
   });
 
+  it('rolls back every generic version transition when its audit evidence fails [FR-09, FR-25, AI-04, SEC-07]', async () => {
+    const writeAudit = audit.write.bind(audit);
+    let failAction = 'persona.created';
+    const writeSpy = vi.spyOn(audit, 'write').mockImplementation(async (entry) => {
+      if (entry.action === failAction) throw new Error(`forced ${entry.action} audit failure`);
+      return writeAudit(entry);
+    });
+
+    expect((await request(app).post('/api/v1/personas').set(admin).send(persona)).status).toBe(500);
+    expect(await PersonaModel.countDocuments({ key: persona.key })).toBe(0);
+
+    failAction = '';
+    const created = await request(app).post('/api/v1/personas').set(admin).send(persona);
+    const id = created.body.data._id as string;
+    failAction = 'persona.activated';
+    expect((await request(app).post(`/api/v1/personas/${id}/activate`).set(admin)).status).toBe(500);
+    expect(await PersonaModel.findById(id).lean()).toMatchObject({ status: 'draft', isCurrent: false });
+
+    failAction = '';
+    expect((await request(app).post(`/api/v1/personas/${id}/activate`).set(admin)).status).toBe(200);
+    failAction = 'persona.version_created';
+    expect((await request(app).patch(`/api/v1/personas/${id}`).set(admin).send({ name: 'Atomic Version' })).status).toBe(500);
+    expect(await PersonaModel.countDocuments({ key: persona.key })).toBe(1);
+    expect(await PersonaModel.findById(id).lean()).toMatchObject({ status: 'active', isCurrent: true, name: persona.name });
+
+    failAction = 'persona.deactivated';
+    expect((await request(app).post(`/api/v1/personas/${id}/deactivate`).set(admin)).status).toBe(500);
+    expect(await PersonaModel.findById(id).lean()).toMatchObject({ status: 'active', isCurrent: true });
+    writeSpy.mockRestore();
+  });
+
   it('validates the body (key format, sector enum) [FR-30]', async () => {
     const res = await request(app).post('/api/v1/personas').set(admin).send({ ...persona, key: 'Finance Officer', sector: 'space' });
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('validates the retained sector when a versioned persona edit omits sector [FR-09, NFR-04]', async () => {
+    const created = await request(app).post('/api/v1/personas').set(admin).send(persona);
+    expect(created.status).toBe(201);
+    await PersonaModel.updateOne({ _id: created.body.data._id }, { $set: { sector: 'legacy_removed' } });
+
+    const response = await request(app)
+      .patch(`/api/v1/personas/${created.body.data._id}`)
+      .set(admin)
+      .send({ name: 'Must not copy an unconfigured scope' });
+    expect(response.status).toBe(400);
+    expect(response.body.error.message).toContain('legacy_removed');
+    expect(await PersonaModel.countDocuments({ key: persona.key })).toBe(1);
   });
 
   it('requestors only see active versions; activation makes it current [FR-09]', async () => {

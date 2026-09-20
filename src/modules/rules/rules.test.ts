@@ -91,6 +91,30 @@ describe('rules change control (FR-16, AI-05)', () => {
     expect(await AuditLogModel.countDocuments({ action: { $in: ['rule.created', 'rule.approved', 'rule.activated'] } })).toBe(3);
   });
 
+  it('rejects rule scopes outside the tenant sector vocabulary [FR-16, NFR-04]', async () => {
+    const response = await request(app).post('/api/v1/rules').set(admin).send({ ...body, sectors: ['energy'] });
+    expect(response.status).toBe(400);
+    expect(response.body.error.message).toContain('not configured');
+    expect(await RuleModel.countDocuments({ key: body.key })).toBe(0);
+  });
+
+  it('rolls back rule approval when its audit evidence fails [FR-16, FR-25, AI-05, SEC-07]', async () => {
+    const created = await request(app).post('/api/v1/rules').set(admin).send(body);
+    const id = created.body.data._id as string;
+    const writeAudit = audit.write.bind(audit);
+    const writeSpy = vi.spyOn(audit, 'write').mockImplementation(async (entry) => {
+      if (entry.action === 'rule.approved') throw new Error('forced rule approval audit failure');
+      return writeAudit(entry);
+    });
+
+    const failed = await request(app).post(`/api/v1/rules/${id}/approve`).set(admin2).send({ changeRef: 'ATOMIC-RULE' });
+    expect(failed.status).toBe(500);
+    expect(await RuleModel.findById(id).lean()).toMatchObject({ status: 'draft', isCurrent: false });
+    expect((await RuleModel.findById(id).lean())?.approvedBy).toBeUndefined();
+    expect(await AuditLogModel.countDocuments({ action: 'rule.approved', 'entity.id': id })).toBe(0);
+    writeSpy.mockRestore();
+  });
+
   it('an active-rule edit creates a separate draft, keeps v1 effective, and its editor cannot approve it [AI-05]', async () => {
     const created = await request(app).post('/api/v1/rules').set(admin).send(body);
     const id = created.body.data._id;

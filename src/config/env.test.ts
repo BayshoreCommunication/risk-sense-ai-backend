@@ -8,9 +8,10 @@ const production = {
   SMTP_URL: 'smtp://example.invalid',
   MONGODB_URI: 'mongodb+srv://example.invalid/risksense',
   CORS_ORIGINS: 'https://app.example.invalid',
+  CRON_SECRET: 'test-cron-secret-12345',
 };
 
-describe('production environment guardrails [FR-08, SEC-04]', () => {
+describe('production environment guardrails [FR-01, FR-08, SEC-03, SEC-04]', () => {
   it('rejects mock AI and a missing OpenAI credential in production', () => {
     const result = envSchema.safeParse({ ...production, AI_PROVIDER: 'mock' });
     expect(result.success).toBe(false);
@@ -53,5 +54,29 @@ describe('production environment guardrails [FR-08, SEC-04]', () => {
     expect(result.error.issues.map((issue) => issue.path.join('.'))).toEqual(
       expect.arrayContaining(['OPENAI_API_KEY', 'FIREBASE_SERVICE_ACCOUNT_B64', 'MONGODB_URI', 'CORS_ORIGINS']),
     );
+  });
+
+  it('rejects the Resend sandbox sender in production [FR-01, SEC-03]', () => {
+    const result = envSchema.safeParse({
+      ...production,
+      AI_PROVIDER: 'openai',
+      OPENAI_API_KEY: 'test-key',
+      MAIL_PROVIDER: 'resend',
+      MAIL_FROM: 'RiskSense AI <onboarding@resend.dev>',
+      RESEND_API_KEY: 'test-resend-key',
+      SMTP_URL: undefined,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error.issues.map((issue) => issue.path.join('.'))).toContain('MAIL_FROM');
+  });
+
+  it('requires a nonblank 16+ character nightly-job credential in production [SEC-06, SEC-07]', () => {
+    for (const CRON_SECRET of [undefined, '', 'too-short', '                ', 'valid-length-but\nunsafe', 'development-cron-secret-change-me']) {
+      const result = envSchema.safeParse({ ...production, AI_PROVIDER: 'openai', OPENAI_API_KEY: 'test-key', CRON_SECRET });
+      expect(result.success, JSON.stringify(CRON_SECRET)).toBe(false);
+      if (result.success) continue;
+      expect(result.error.issues.map((issue) => issue.path.join('.'))).toContain('CRON_SECRET');
+    }
   });
 });

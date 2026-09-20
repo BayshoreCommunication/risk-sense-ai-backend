@@ -1,10 +1,12 @@
 import { Types } from 'mongoose';
 import type { z } from 'zod';
 import { AppError, notFound } from '../../lib/errors';
+import { withMongoTransaction } from '../../lib/db';
 import type { AuthUser } from '../../middleware/auth';
 import { audit } from '../audit/service';
 import { QuestionModel } from './model';
 import type { QuestionBody, QuestionListQuery, QuestionPatch } from './schema';
+import { guardConfiguredSectorReferences } from '../tenants/sectors';
 
 async function load(tenantId: string, id: string) {
   if (!Types.ObjectId.isValid(id)) throw notFound('question');
@@ -27,48 +29,56 @@ export const questionsService = {
   get: load,
 
   async create(tenantId: string, body: QuestionBody, actor: AuthUser) {
-    const clash = await QuestionModel.findOne({ tenantId, key: body.key }).lean();
-    if (clash) throw new AppError('CONFLICT', `question key "${body.key}" already exists`);
-    const doc = await QuestionModel.create({ ...body, tenantId, createdBy: actor.id });
-    await audit.write({
-      tenantId,
-      category: 'config',
-      action: 'question.created',
-      actor,
-      entity: { type: 'question', id: String(doc._id) },
-      payload: { key: body.key, factKey: body.factKey },
+    return withMongoTransaction(async () => {
+      await guardConfiguredSectorReferences(tenantId, body.tags.sectors);
+      const clash = await QuestionModel.findOne({ tenantId, key: body.key }).lean();
+      if (clash) throw new AppError('CONFLICT', `question key "${body.key}" already exists`);
+      const doc = await QuestionModel.create({ ...body, tenantId, createdBy: actor.id });
+      await audit.write({
+        tenantId,
+        category: 'config',
+        action: 'question.created',
+        actor,
+        entity: { type: 'question', id: String(doc._id) },
+        payload: { key: body.key, factKey: body.factKey },
+      });
+      return doc;
     });
-    return doc;
   },
 
   /** Questions are edited in place (not versioned); every change is audited with before/after (FR-25). */
   async update(tenantId: string, id: string, patch: z.infer<typeof QuestionPatch>, actor: AuthUser) {
-    const doc = await load(tenantId, id);
-    if (doc.status === 'retired') throw new AppError('CONFLICT', 'retired questions cannot be edited');
-    const before = doc.toObject();
-    Object.assign(doc, patch);
-    await doc.save();
-    const changed = Object.keys(patch);
-    await audit.write({
-      tenantId,
-      category: 'config',
-      action: 'question.updated',
-      actor,
-      entity: { type: 'question', id },
-      payload: { changed, before: pick(before, changed), after: pick(doc.toObject(), changed) },
+    return withMongoTransaction(async () => {
+      const doc = await load(tenantId, id);
+      await guardConfiguredSectorReferences(tenantId, patch.tags?.sectors ?? doc.tags?.sectors ?? []);
+      if (doc.status === 'retired') throw new AppError('CONFLICT', 'retired questions cannot be edited');
+      const before = doc.toObject();
+      Object.assign(doc, patch);
+      await doc.save();
+      const changed = Object.keys(patch);
+      await audit.write({
+        tenantId,
+        category: 'config',
+        action: 'question.updated',
+        actor,
+        entity: { type: 'question', id },
+        payload: { changed, before: pick(before, changed), after: pick(doc.toObject(), changed) },
+      });
+      return doc;
     });
-    return doc;
   },
 
   /** Retire = removed from new sessions, preserved on historical records (FR-15). */
   async retire(tenantId: string, id: string, actor: AuthUser) {
-    const doc = await load(tenantId, id);
-    if (doc.status === 'retired') return doc;
-    doc.status = 'retired';
-    doc.retiredAt = new Date();
-    await doc.save();
-    await audit.write({ tenantId, category: 'config', action: 'question.retired', actor, entity: { type: 'question', id }, payload: { key: doc.key } });
-    return doc;
+    return withMongoTransaction(async () => {
+      const doc = await load(tenantId, id);
+      if (doc.status === 'retired') return doc;
+      doc.status = 'retired';
+      doc.retiredAt = new Date();
+      await doc.save();
+      await audit.write({ tenantId, category: 'config', action: 'question.retired', actor, entity: { type: 'question', id }, payload: { key: doc.key } });
+      return doc;
+    });
   },
 
   /** Active questions by key — used by scenario activation validation and the chatbot. */

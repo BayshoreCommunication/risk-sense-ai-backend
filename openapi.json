@@ -20,6 +20,11 @@
         "type": "apiKey",
         "in": "header",
         "name": "X-Session-Id"
+      },
+      "cronSecret": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Vercel Cron shared secret; not a user token"
       }
     },
     "schemas": {
@@ -161,6 +166,12 @@
               "blockConcurrentLogin"
             ]
           },
+          "sectors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "sessionPolicy": {
             "type": "object",
             "properties": {
@@ -182,6 +193,7 @@
           "slug",
           "plan",
           "features",
+          "sectors",
           "sessionPolicy"
         ]
       },
@@ -716,6 +728,12 @@
               "blockConcurrentLogin"
             ]
           },
+          "sectors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "sso": {
             "type": "object",
             "properties": {
@@ -792,6 +810,7 @@
           "slug",
           "plan",
           "features",
+          "sectors",
           "sso",
           "authPolicy",
           "sessionPolicy",
@@ -1358,6 +1377,161 @@
         }
       }
     },
+    "/jobs/nightly": {
+      "get": {
+        "security": [
+          {
+            "cronSecret": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scheduled retention, audit-chain verification, and conformance summary (SEC-06, SEC-07, FR-30)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "ranAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "durationMs": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "retention": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "tenant": {
+                                "type": "string"
+                              },
+                              "flagged": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "reduced": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "archived": {
+                                "type": "integer",
+                                "minimum": 0
+                              }
+                            },
+                            "required": [
+                              "tenant",
+                              "flagged",
+                              "reduced",
+                              "archived"
+                            ]
+                          }
+                        },
+                        "auditChains": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "tenantId": {
+                                "type": "string"
+                              },
+                              "slug": {
+                                "type": "string"
+                              },
+                              "ok": {
+                                "type": "boolean"
+                              },
+                              "firstBadSeq": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "exclusiveMinimum": true
+                              }
+                            },
+                            "required": [
+                              "tenantId",
+                              "slug",
+                              "ok"
+                            ]
+                          }
+                        },
+                        "conformance": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "tenant": {
+                                "type": "string"
+                              },
+                              "scanned": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "flagged": {
+                                "type": "integer",
+                                "minimum": 0
+                              }
+                            },
+                            "required": [
+                              "tenant",
+                              "scanned",
+                              "flagged"
+                            ]
+                          }
+                        },
+                        "brokenChains": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "ranAt",
+                        "durationMs",
+                        "retention",
+                        "auditChains",
+                        "conformance",
+                        "brokenChains"
+                      ]
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing or invalid scheduler credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/auth/otp/request": {
       "post": {
         "security": [
@@ -1367,7 +1541,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Code emailed (devCode only outside production with the console mail provider)",
+            "description": "Code emailed (devCode is never returned in production; non-production console/demo flows may return it)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1999,12 +2173,7 @@
           {
             "schema": {
               "type": "string",
-              "enum": [
-                "financial",
-                "healthcare",
-                "it",
-                "general"
-              ]
+              "pattern": "^[a-z][a-z0-9_]{1,63}$"
             },
             "required": false,
             "name": "sector",
@@ -2091,12 +2260,7 @@
                   },
                   "sector": {
                     "type": "string",
-                    "enum": [
-                      "financial",
-                      "healthcare",
-                      "it",
-                      "general"
-                    ]
+                    "pattern": "^[a-z][a-z0-9_]{1,63}$"
                   },
                   "description": {
                     "type": "string",
@@ -2295,12 +2459,7 @@
                   },
                   "sector": {
                     "type": "string",
-                    "enum": [
-                      "financial",
-                      "healthcare",
-                      "it",
-                      "general"
-                    ]
+                    "pattern": "^[a-z][a-z0-9_]{1,63}$"
                   },
                   "description": {
                     "type": "string",
@@ -3397,12 +3556,7 @@
           {
             "schema": {
               "type": "string",
-              "enum": [
-                "financial",
-                "healthcare",
-                "it",
-                "general"
-              ]
+              "pattern": "^[a-z][a-z0-9_]{1,63}$"
             },
             "required": false,
             "name": "sector",
@@ -3562,12 +3716,7 @@
                         "type": "array",
                         "items": {
                           "type": "string",
-                          "enum": [
-                            "financial",
-                            "healthcare",
-                            "it",
-                            "general"
-                          ]
+                          "pattern": "^[a-z][a-z0-9_]{1,63}$"
                         },
                         "minItems": 1
                       },
@@ -3826,12 +3975,7 @@
                         "type": "array",
                         "items": {
                           "type": "string",
-                          "enum": [
-                            "financial",
-                            "healthcare",
-                            "it",
-                            "general"
-                          ]
+                          "pattern": "^[a-z][a-z0-9_]{1,63}$"
                         },
                         "minItems": 1
                       },
@@ -4321,12 +4465,7 @@
           {
             "schema": {
               "type": "string",
-              "enum": [
-                "financial",
-                "healthcare",
-                "it",
-                "general"
-              ]
+              "pattern": "^[a-z][a-z0-9_]{1,63}$"
             },
             "required": false,
             "name": "sector",
@@ -5564,12 +5703,7 @@
                     "type": "array",
                     "items": {
                       "type": "string",
-                      "enum": [
-                        "financial",
-                        "healthcare",
-                        "it",
-                        "general"
-                      ]
+                      "pattern": "^[a-z][a-z0-9_]{1,63}$"
                     },
                     "default": []
                   }
@@ -6870,12 +7004,7 @@
                     "type": "array",
                     "items": {
                       "type": "string",
-                      "enum": [
-                        "financial",
-                        "healthcare",
-                        "it",
-                        "general"
-                      ]
+                      "pattern": "^[a-z][a-z0-9_]{1,63}$"
                     },
                     "default": []
                   }
@@ -7259,12 +7388,7 @@
                   },
                   "sector": {
                     "type": "string",
-                    "enum": [
-                      "financial",
-                      "healthcare",
-                      "it",
-                      "general"
-                    ]
+                    "pattern": "^[a-z][a-z0-9_]{1,63}$"
                   },
                   "formula": {
                     "type": "string",
@@ -14681,12 +14805,7 @@
                   },
                   "sector": {
                     "type": "string",
-                    "enum": [
-                      "financial",
-                      "healthcare",
-                      "it",
-                      "general"
-                    ]
+                    "pattern": "^[a-z][a-z0-9_]{1,63}$"
                   },
                   "formula": {
                     "type": "string",
@@ -22308,12 +22427,7 @@
                   },
                   "sector": {
                     "type": "string",
-                    "enum": [
-                      "financial",
-                      "healthcare",
-                      "it",
-                      "general"
-                    ]
+                    "pattern": "^[a-z][a-z0-9_]{1,63}$"
                   },
                   "requiredFactKeys": {
                     "type": "array",
@@ -23817,6 +23931,15 @@
                       "free",
                       "paid"
                     ]
+                  },
+                  "sectors": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]{1,63}$"
+                    },
+                    "minItems": 1,
+                    "maxItems": 50
                   },
                   "features": {
                     "type": "object",

@@ -2,12 +2,21 @@ import { z } from 'zod';
 import { TENANT_PLANS } from '../tenants/model';
 import { ROLES } from '../users/model';
 import { FIXED_DR_TARGETS } from './dr.model';
+import { SECTOR_KEY_REGEX } from '../shared/enums';
+
+const SectorKey = z.string().trim().toLowerCase().regex(SECTOR_KEY_REGEX, 'lowercase snake_case sector key, 2–64 chars');
 
 /** System administrator tenant settings (W10, FR-03, SEC-02, SEC-06). Every field optional: PATCH semantics. */
 export const TenantPatch = z
   .object({
     name: z.string().min(2).max(120).optional(),
     plan: z.enum(TENANT_PLANS).optional(),
+    sectors: z
+      .array(SectorKey)
+      .min(1, 'at least one sector is required')
+      .max(50)
+      .refine((sectors) => new Set(sectors).size === sectors.length, 'sector keys must be unique')
+      .optional(),
     features: z
       .object({
         sso: z.boolean().optional(),

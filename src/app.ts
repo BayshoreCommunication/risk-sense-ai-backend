@@ -4,7 +4,7 @@ import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import { randomUUID } from 'node:crypto';
 import pinoHttp from 'pino-http';
-import { env, isProd, isTest } from './config/env';
+import { env, isTest } from './config/env';
 import { logger } from './lib/logger';
 import { errorHandler, notFoundHandler } from './middleware/error';
 import { assessmentsRouter } from './modules/assessments/routes';
@@ -23,11 +23,19 @@ import { systemRouter } from './modules/system/routes';
 import { retentionRouter } from './modules/retention/routes';
 import { jobsRouter } from './jobs/routes';
 import { usersRouter } from './modules/users/routes';
+import { createMongoRateLimitStore } from './modules/rate-limits/store';
+
+/**
+ * The global limiter runs before authentication, so request headers are not trusted caller
+ * identities here. Use the proxy-resolved network address and reserve verified session keys for
+ * the route-specific limiters mounted after authentication.
+ */
+export const globalRateLimitKey = (req: { ip?: string }) => req.ip ?? 'anonymous';
 
 export function createApp() {
   const app = express();
 
-  app.set('trust proxy', 1); // Render sits behind a proxy; needed for req.ip and rate limiting
+  app.set('trust proxy', 1); // The deployment proxy forwards the client address used by rate limiting.
   app.disable('x-powered-by');
 
   app.use((req, res, next) => {
@@ -39,7 +47,7 @@ export function createApp() {
 
   app.use(
     helmet({
-      // API only: no HTML is served, so a strict CSP is fine; HSTS is meaningful once Render terminates TLS (SEC-04).
+      // API only: no HTML is served, so a strict CSP is fine; HSTS applies once the deployment edge terminates TLS (SEC-04).
       contentSecurityPolicy: { directives: { defaultSrc: ["'none'"], frameAncestors: ["'none'"] } },
       hsts: { maxAge: 63072000, includeSubDomains: true, preload: true },
       crossOriginResourcePolicy: { policy: 'cross-origin' },
@@ -59,9 +67,9 @@ export function createApp() {
   app.use(express.json({ limit: '1mb' }));
   app.use(
     rateLimit({
-      // API.md "Rate limits": a coarse per-caller backstop — keyed by app session, then the dev-bypass identity
-      // (non-production only), then IP for unauthenticated calls. The real protection is the per-route limits in
-      // middleware/limits.ts, which sit on top of this and stay tight on the expensive routes.
+      // API.md "Rate limits": a coarse pre-authentication IP backstop. Unverified X-Session-Id and
+      // X-Dev-User headers must not create attacker-controlled buckets. The real protection is the
+      // post-authentication per-route limits in middleware/limits.ts.
       //
       // 60/min was below normal single-user traffic and throttled the product against itself: one /admin/reports
       // view costs eight reads (shell /me, departments, personas, four reports, trends), so a few screens in a
@@ -71,9 +79,12 @@ export function createApp() {
       limit: 300,
       standardHeaders: 'draft-7',
       legacyHeaders: false,
-      keyGenerator: (req) => req.header('x-session-id') ?? (env.AUTH_DEV_BYPASS && !isProd ? req.header('x-dev-user') : undefined) ?? req.ip ?? 'anonymous',
-      skip: () => isTest || env.RATE_LIMIT_DISABLED,
+      keyGenerator: globalRateLimitKey,
+      // Liveness/readiness must still describe process/database state when the shared limiter store is
+      // unavailable. All application traffic fails closed on a store error.
+      skip: (req) => req.path === '/api/v1/health' || req.path.startsWith('/api/v1/health/') || isTest || env.RATE_LIMIT_DISABLED,
       message: { error: { code: 'RATE_LIMITED', message: 'Too many requests' } },
+      store: createMongoRateLimitStore('global'),
     }),
   );
 

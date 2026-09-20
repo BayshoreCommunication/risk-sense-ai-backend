@@ -1,12 +1,36 @@
+import express from 'express';
+import rateLimit, { type Options } from 'express-rate-limit';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { app, login, seeded } from '../tests/helpers';
+import { RateLimitCounterModel } from '../modules/rate-limits/model';
+import { createMongoRateLimitStore } from '../modules/rate-limits/store';
+import { globalRateLimitKey } from '../app';
 
 /** SEC-04 / API.md rate limits — enabled in tests only with RATE_LIMIT_TEST=1 (limits.ts). */
 describe('rate limits and security headers [SEC-04, NFR-03]', () => {
   beforeAll(() => { process.env.RATE_LIMIT_TEST = '1'; });
   afterAll(() => { delete process.env.RATE_LIMIT_TEST; });
   beforeEach(async () => { await seeded(); });
+
+  it('does not trust a rotating session header before authentication [SEC-04]', async () => {
+    const instance = express();
+    instance.use(
+      rateLimit({
+        windowMs: 60_000,
+        limit: 2,
+        standardHeaders: 'draft-7',
+        legacyHeaders: false,
+        keyGenerator: globalRateLimitKey,
+        store: createMongoRateLimitStore('test-global-untrusted-header'),
+      }),
+    );
+    instance.get('/limited', (_req, res) => res.json({ ok: true }));
+
+    expect((await request(instance).get('/limited').set('X-Session-Id', 'attacker-bucket-1')).status).toBe(200);
+    expect((await request(instance).get('/limited').set('X-Session-Id', 'attacker-bucket-2')).status).toBe(200);
+    expect((await request(instance).get('/limited').set('X-Session-Id', 'attacker-bucket-3')).status).toBe(429);
+  });
 
   it('throttles session creation per IP after 10 attempts with a RATE_LIMITED envelope', async () => {
     let last = 0;
@@ -29,6 +53,77 @@ describe('rate limits and security headers [SEC-04, NFR-03]', () => {
     expect(last).toBe(429);
     const other = await login('requestor@paid.local');
     expect((await request(app).get('/api/v1/reports/volume').set(other)).status).toBe(200);
+  });
+
+  it('shares one atomic request budget across independent app and store instances [SEC-04, NFR-03]', async () => {
+    const makeApp = () => {
+      const instance = express();
+      instance.use(
+        rateLimit({
+          windowMs: 60_000,
+          limit: 2,
+          standardHeaders: 'draft-7',
+          legacyHeaders: false,
+          keyGenerator: () => 'shared-caller',
+          store: createMongoRateLimitStore('test-cross-app'),
+          message: { error: { code: 'RATE_LIMITED', message: 'Too many requests' } },
+        }),
+      );
+      instance.get('/limited', (_req, res) => res.json({ ok: true }));
+      return instance;
+    };
+
+    // These are separate Express applications with separate store objects, matching two warm API
+    // processes. The third request is rejected because both stores allocate from the Mongo row.
+    const firstInstance = makeApp();
+    const secondInstance = makeApp();
+    expect((await request(firstInstance).get('/limited')).status).toBe(200);
+    expect((await request(secondInstance).get('/limited')).status).toBe(200);
+    const limited = await request(firstInstance).get('/limited');
+    expect(limited.status).toBe(429);
+    expect(limited.body).toEqual({ error: { code: 'RATE_LIMITED', message: 'Too many requests' } });
+
+    const stored = await RateLimitCounterModel.findOne({ namespace: 'test-cross-app' }).lean();
+    expect(stored).toMatchObject({ hits: 3 });
+    expect(stored!.keyHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(stored)).not.toContain('shared-caller');
+  });
+
+  it('does not lose concurrent increments from separate store instances [SEC-04, NFR-03]', async () => {
+    const first = createMongoRateLimitStore('test-concurrent');
+    const second = createMongoRateLimitStore('test-concurrent');
+    first.init({ windowMs: 60_000 } as Options);
+    second.init({ windowMs: 60_000 } as Options);
+
+    const increments = await Promise.all(
+      Array.from({ length: 24 }, (_, index) => (index % 2 === 0 ? first : second).increment('same-budget')),
+    );
+    expect(increments.map((entry) => entry.totalHits).sort((a, b) => a - b)).toEqual(
+      Array.from({ length: 24 }, (_, index) => index + 1),
+    );
+    expect((await first.get('same-budget'))?.totalHits).toBe(24);
+  });
+
+  it('resets expired windows atomically and provisions unique plus TTL indexes [SEC-04]', async () => {
+    const store = createMongoRateLimitStore('test-expired');
+    store.init({ windowMs: 60_000 } as Options);
+    await store.increment('expired-budget');
+    await RateLimitCounterModel.updateOne(
+      { namespace: 'test-expired' },
+      { $set: { hits: 99, resetAt: new Date(Date.now() - 1_000) } },
+    );
+
+    const incremented = await store.increment('expired-budget');
+    expect(incremented.totalHits).toBe(1);
+    expect(incremented.resetTime.getTime()).toBeGreaterThan(Date.now());
+
+    const indexes = await RateLimitCounterModel.collection.indexes();
+    expect(indexes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: { namespace: 1, keyHash: 1 }, unique: true }),
+        expect.objectContaining({ key: { resetAt: 1 }, expireAfterSeconds: 0 }),
+      ]),
+    );
   });
 
   it('does not throttle one user browsing several dashboard screens in a minute [SEC-04]', async () => {

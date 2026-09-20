@@ -1,8 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import request from 'supertest';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { app, login, seeded } from '../../tests/helpers';
+import { AuditLogModel } from '../audit/model';
+import { audit } from '../audit/service';
 import { classify, computeConfidence, computeFactors, computeScore, simulate, type MatrixLike } from './compute';
 import { FACTOR_KEYS, ScoringMatrixModel } from './model';
 import { scoringService } from './service';
@@ -80,6 +82,8 @@ describe('scoring matrices API + simulate + golden set', () => {
     admin2 = await login('admin2@dev.local');
   });
 
+  afterEach(() => vi.restoreAllMocks());
+
   it('matrix body validation: weights must sum to 100, thresholds contiguous 0–100', async () => {
     const body = scoringService.parseSheet(starter.scoring).body!;
     const bad = JSON.parse(JSON.stringify(body));
@@ -89,6 +93,29 @@ describe('scoring matrices API + simulate + golden set', () => {
     const bad2 = JSON.parse(JSON.stringify(body));
     bad2.thresholds.risk = { min: 30, max: 50 };
     expect((await request(app).post('/api/v1/scoring-matrices').set(admin).send(bad2)).status).toBe(400);
+  });
+
+  it('rejects matrix scopes outside the tenant sector vocabulary [FR-18, NFR-04]', async () => {
+    const body = { ...scoringService.parseSheet(starter.scoring).body!, key: 'energy_matrix', sector: 'energy' };
+    const response = await request(app).post('/api/v1/scoring-matrices').set(admin).send(body);
+    expect(response.status).toBe(400);
+    expect(response.body.error.message).toContain('not configured');
+    expect(await ScoringMatrixModel.countDocuments({ key: body.key })).toBe(0);
+  });
+
+  it('validates the retained sector when a versioned matrix edit omits sector [FR-18, NFR-04]', async () => {
+    const body = { ...scoringService.parseSheet(starter.scoring).body!, key: 'legacy_matrix', sector: 'financial' };
+    const created = await request(app).post('/api/v1/scoring-matrices').set(admin).send(body);
+    expect(created.status).toBe(201);
+    await ScoringMatrixModel.updateOne({ _id: created.body.data._id }, { $set: { sector: 'legacy_removed' } });
+
+    const response = await request(app)
+      .patch(`/api/v1/scoring-matrices/${created.body.data._id}`)
+      .set(admin)
+      .send({ name: 'Must not copy an unconfigured scope' });
+    expect(response.status).toBe(400);
+    expect(response.body.error.message).toContain('legacy_removed');
+    expect(await ScoringMatrixModel.countDocuments({ key: body.key })).toBe(1);
   });
 
   it('draft → approve (other admin) → activate; simulate uses the current matrix [AI-05]', async () => {
@@ -107,6 +134,24 @@ describe('scoring matrices API + simulate + golden set', () => {
     expect(sim.body.data.matrix.key).toBe('default');
     expect(sim.body.data.score).toBeGreaterThan(0);
     expect(FACTOR_KEYS.every((k) => k in sim.body.data.factors)).toBe(true);
+  });
+
+  it('rolls back matrix approval when its audit evidence fails [FR-18, FR-25, AI-05, SEC-07]', async () => {
+    const body = scoringService.parseSheet(starter.scoring).body!;
+    const created = await request(app).post('/api/v1/scoring-matrices').set(admin).send(body);
+    const id = created.body.data._id as string;
+    const writeAudit = audit.write.bind(audit);
+    const writeSpy = vi.spyOn(audit, 'write').mockImplementation(async (entry) => {
+      if (entry.action === 'scoring_matrix.approved') throw new Error('forced matrix approval audit failure');
+      return writeAudit(entry);
+    });
+
+    const failed = await request(app).post(`/api/v1/scoring-matrices/${id}/approve`).set(admin2).send({ changeRef: 'ATOMIC-MATRIX' });
+    expect(failed.status).toBe(500);
+    expect(await ScoringMatrixModel.findById(id).lean()).toMatchObject({ status: 'draft', isCurrent: false });
+    expect((await ScoringMatrixModel.findById(id).lean())?.approvedBy).toBeUndefined();
+    expect(await AuditLogModel.countDocuments({ action: 'scoring_matrix.approved', 'entity.id': id })).toBe(0);
+    writeSpy.mockRestore();
   });
 
   it('an active-matrix edit preserves v1 and the effective-change editor cannot approve v2 [AI-05]', async () => {

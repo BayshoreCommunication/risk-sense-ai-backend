@@ -76,6 +76,8 @@ describe('reports & analytics [FR-26, FR-27, FR-28, DASH-03, DASH-04]', () => {
     const free = await get('/reports/volume', dev);
     expect(free.status).toBe(403);
     expect(free.body.error.code).toBe('FEATURE_DISABLED');
+    const devUser = await UserModel.findOne({ email: 'requestor@dev.local' }).lean();
+    expect(await AuditLogModel.exists({ action: 'access.denied', actorUserId: devUser!._id, 'payload.code': 'FEATURE_DISABLED' })).toBeTruthy();
     expect((await get('/reports/nonsense', admin)).status).toBe(400);
     expect((await get('/reports/volume', admin, { from: '2026-09-10', to: '2026-09-01' })).status).toBe(400);
   });

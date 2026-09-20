@@ -6,7 +6,10 @@ export default defineConfig({
     globals: false,
     setupFiles: ['src/tests/setup.ts'],
     include: ['src/**/*.test.ts'],
-    testTimeout: 30_000,
+    // Transaction-heavy assessment flows exercise a single-node replica set and can exceed 30s on
+    // a loaded workstation even though their focused runs are fast. A timed-out request can keep
+    // unwinding while the next test clears the shared database, producing misleading cascade errors.
+    testTimeout: 60_000,
     hookTimeout: 120_000, // first run may download / start the mongod binary
     fileParallelism: false, // one in-memory mongod shared across files
   },

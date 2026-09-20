@@ -1,5 +1,5 @@
 import { Schema, model, type InferSchemaType } from 'mongoose';
-import { CONTENT_SECTORS, QUESTION_TYPES } from '../shared/enums';
+import { QUESTION_TYPES } from '../shared/enums';
 
 /**
  * Question bank (FR-15). Questions are not versioned individually (DecisionLog 2026-09-13-09):
@@ -26,7 +26,7 @@ const questionSchema = new Schema(
     tags: {
       personaKeys: { type: [String], default: [] },
       scenarioKeys: { type: [String], default: [] }, // empty = all scenarios of the tagged personas
-      sectors: { type: [String], enum: CONTENT_SECTORS, default: [] },
+      sectors: { type: [String], default: [] },
       category: { type: String },
     },
     branchTrigger: {

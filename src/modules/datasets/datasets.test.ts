@@ -10,6 +10,7 @@ import { QuestionModel } from '../questions/model';
 import { RuleModel } from '../rules/model';
 import { ScenarioModel } from '../scenarios/model';
 import { ScoringMatrixModel } from '../scoring/model';
+import { TenantModel } from '../tenants/model';
 import { DatasetModel } from './model';
 import { buildTemplateWorkbook, SAMPLE } from './template';
 
@@ -30,6 +31,13 @@ describe('datasets (FR-13, FR-14, AI-04, AI-06)', () => {
   const uploadJson = (h: Record<string, string>, content: unknown, fileName = 'sample.json') =>
     request(app).post('/api/v1/datasets').set(h).send({ fileName, content });
 
+  const sampleForSector = (sector: string) => {
+    const content = JSON.parse(JSON.stringify(SAMPLE)) as typeof SAMPLE;
+    content.personas.forEach((persona) => { persona.sector = sector; });
+    content.questions.forEach((question) => { question.sectors = sector; });
+    return content;
+  };
+
   it('validates the sample JSON content and stores a dataset without applying anything [FR-13]', async () => {
     const res = await uploadJson(admin, SAMPLE);
     expect(res.status).toBe(201);
@@ -37,6 +45,31 @@ describe('datasets (FR-13, FR-14, AI-04, AI-06)', () => {
     expect(res.body.data.counts).toMatchObject({ personas: 1, scenarios: 1, questions: 11, scoring: 6 });
     expect(await PersonaModel.countDocuments()).toBe(0);
     expect(await AuditLogModel.countDocuments({ action: 'dataset.uploaded' })).toBe(1);
+  });
+
+  it('rolls back upload and approval state when required audit evidence fails [FR-13, FR-14, FR-25, SEC-07]', async () => {
+    const writeAudit = audit.write.bind(audit);
+    let failAction = 'dataset.uploaded';
+    const writeSpy = vi.spyOn(audit, 'write').mockImplementation(async (entry) => {
+      if (entry.action === failAction) throw new Error(`forced ${entry.action} audit failure`);
+      return writeAudit(entry);
+    });
+
+    const failedUpload = await uploadJson(admin, SAMPLE, 'atomic-upload.json');
+    expect(failedUpload.status).toBe(500);
+    expect(await DatasetModel.countDocuments({ fileName: 'atomic-upload.json' })).toBe(0);
+    expect(await AuditLogModel.countDocuments({ action: 'dataset.uploaded' })).toBe(0);
+
+    failAction = '';
+    const uploaded = await uploadJson(admin, SAMPLE, 'atomic-approval.json');
+    expect(uploaded.status).toBe(201);
+    failAction = 'dataset.approved';
+    const failedApproval = await request(app).post(`/api/v1/datasets/${uploaded.body.data._id}/approve`).set(admin2);
+    expect(failedApproval.status).toBe(500);
+    expect(await DatasetModel.findById(uploaded.body.data._id).lean()).toMatchObject({ status: 'validated' });
+    expect((await DatasetModel.findById(uploaded.body.data._id).lean())?.reviewerId).toBeUndefined();
+    expect(await AuditLogModel.countDocuments({ action: 'dataset.approved', 'entity.id': uploaded.body.data._id })).toBe(0);
+    writeSpy.mockRestore();
   });
 
   it('parses the generated XLSX template (multipart) the same way [T-006]', async () => {
@@ -68,6 +101,62 @@ describe('datasets (FR-13, FR-14, AI-04, AI-06)', () => {
     expect(errors2.some((e) => e.column === 'conversation_flow' && e.message.includes('does_not_exist'))).toBe(true);
     expect(errors2.some((e) => e.column === 'required_fact_keys' && e.message.includes('never_asked'))).toBe(true);
     expect(await AuditLogModel.countDocuments({ action: 'dataset.rejected' })).toBe(2);
+  });
+
+  it('rejects dataset persona and question sectors outside the tenant vocabulary [FR-13, NFR-04]', async () => {
+    const unknownSector = sampleForSector('energy');
+
+    const response = await uploadJson(admin, unknownSector, 'unknown-sector.json');
+    expect(response.status).toBe(201);
+    expect(response.body.data.status).toBe('rejected');
+    const errors = response.body.data.validationErrors as { sheet: string; column?: string; message: string }[];
+    expect(errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sheet: 'personas', column: 'sector', message: expect.stringContaining('energy') }),
+      expect.objectContaining({ sheet: 'questions', column: 'sectors', message: expect.stringContaining('energy') }),
+    ]));
+    expect(await DatasetModel.countDocuments({ fileName: 'unknown-sector.json', status: 'rejected' })).toBe(1);
+  });
+
+  it('blocks sector removal while a validated or approved dataset still references it [FR-13, NFR-04]', async () => {
+    const sysadmin = await login('sysadmin@dev.local');
+    const withEnergy = ['financial', 'healthcare', 'it', 'general', 'energy'];
+    expect((await request(app).patch('/api/v1/system/tenant').set(sysadmin).send({ sectors: withEnergy })).status).toBe(200);
+
+    const upload = await uploadJson(admin, sampleForSector('energy'), 'pending-energy.json');
+    expect(upload.status).toBe(201);
+    expect(upload.body.data.status).toBe('validated');
+    const withoutEnergy = ['financial', 'healthcare', 'it', 'general'];
+    const whileValidated = await request(app).patch('/api/v1/system/tenant').set(sysadmin).send({ sectors: withoutEnergy });
+    expect(whileValidated.status).toBe(409);
+
+    expect((await request(app).post(`/api/v1/datasets/${upload.body.data._id}/approve`).set(admin2)).status).toBe(200);
+    const whileApproved = await request(app).patch('/api/v1/system/tenant').set(sysadmin).send({ sectors: withoutEnergy });
+    expect(whileApproved.status).toBe(409);
+    expect((await TenantModel.findOne({ slug: 'tac' }).lean())?.sectors).toContain('energy');
+  });
+
+  it('serializes upload creation against concurrent sector removal [FR-13, NFR-04]', async () => {
+    const sysadmin = await login('sysadmin@dev.local');
+    const withEnergy = ['financial', 'healthcare', 'it', 'general', 'energy'];
+    const withoutEnergy = ['financial', 'healthcare', 'it', 'general'];
+    expect((await request(app).patch('/api/v1/system/tenant').set(sysadmin).send({ sectors: withEnergy })).status).toBe(200);
+
+    const [upload, removal] = await Promise.all([
+      uploadJson(admin, sampleForSector('energy'), 'concurrent-energy.json'),
+      request(app).patch('/api/v1/system/tenant').set(sysadmin).send({ sectors: withoutEnergy }),
+    ]);
+    expect(upload.status).toBe(201);
+    expect(['validated', 'rejected']).toContain(upload.body.data.status);
+
+    const tenant = await TenantModel.findOne({ slug: 'tac' }).lean();
+    if (upload.body.data.status === 'validated') {
+      expect(removal.status).toBe(409);
+      expect(tenant?.sectors).toContain('energy');
+    } else {
+      expect(removal.status).toBe(200);
+      expect(tenant?.sectors).not.toContain('energy');
+      expect((upload.body.data.validationErrors as { message: string }[]).some((error) => error.message.includes('energy'))).toBe(true);
+    }
   });
 
   it('author cannot approve their own upload; another administrator can [AI-06]', async () => {

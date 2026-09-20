@@ -3,8 +3,8 @@ import { Schema, model, type InferSchemaType } from 'mongoose';
 export const TENANT_PLANS = ['free', 'paid'] as const;
 export type TenantPlan = (typeof TENANT_PLANS)[number];
 
-export const SECTORS = ['financial', 'healthcare', 'it'] as const;
-export type Sector = (typeof SECTORS)[number];
+export const DEFAULT_SECTORS = ['financial', 'healthcare', 'it', 'general'] as const;
+export type Sector = string;
 
 const featuresSchema = new Schema(
   {
@@ -26,7 +26,11 @@ const tenantSchema = new Schema(
     slug: { type: String, required: true, unique: true, lowercase: true, trim: true },
     plan: { type: String, enum: TENANT_PLANS, required: true, default: 'free' },
     features: { type: featuresSchema, default: () => ({}) },
-    sectors: { type: [String], enum: SECTORS, default: [] },
+    // Runtime vocabulary, maintained by a system administrator. Content services enforce membership.
+    sectors: { type: [String], default: () => [...DEFAULT_SECTORS] },
+    // Internal serialization row for sector-referencing content writes versus vocabulary removal.
+    // It is deliberately not exposed through tenant APIs and does not change tenant.updatedAt.
+    sectorGuardRevision: { type: Number, default: 0, select: false },
     // Legacy configuration surface retained for compatibility. The plan is authoritative:
     // FREE requestors never require MFA and every PAID account requires it (FR-02, SEC-03).
     authPolicy: {

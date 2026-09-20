@@ -3,9 +3,11 @@ import { env } from './config/env';
 import { connectDb, disconnectDb } from './lib/db';
 import { logger } from './lib/logger';
 import { startScheduler, stopScheduler } from './jobs/scheduler';
+import { ensureRateLimitStoreReady } from './modules/rate-limits/store';
 
 async function main() {
   await connectDb();
+  await ensureRateLimitStoreReady();
   const app = createApp();
   const server = app.listen(env.PORT, () => {
     logger.info({ port: env.PORT, env: env.NODE_ENV }, 'risk-sense-ai-backend listening');

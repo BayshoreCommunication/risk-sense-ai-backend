@@ -17,7 +17,7 @@ export function toCsv(r: ReportResult): string {
   return ['\uFEFF' + head, ...body].join('\r\n') + '\r\n';
 }
 
-/** Simple tabular PDF (pdfkit — pure JS, no headless browser on Render). Landscape A4, repeating header row. */
+/** Simple tabular PDF (pdfkit — pure JS, no headless browser in the API runtime). Landscape A4, repeating header row. */
 export function toPdf(r: ReportResult, title: string, meta: { tenant: string; generatedBy: string }): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 36, info: { Title: title, Author: 'RiskSense AI' } });

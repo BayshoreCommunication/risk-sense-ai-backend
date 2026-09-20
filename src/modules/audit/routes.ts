@@ -11,6 +11,7 @@ import { maskAuditPayload } from '../../lib/sensitive';
 import { AUDIT_CATEGORIES, AuditLogModel } from './model';
 import { audit } from './service';
 import { AuditArchiveManifestModel } from './archive.model';
+import { withMongoTransaction } from '../../lib/db';
 
 export const auditRouter = Router();
 auditRouter.use(authenticate, requireSession);
@@ -83,23 +84,26 @@ auditRouter.post(
     }
     const records = await AuditLogModel.find({ tenantId: req.user!.tenantId, createdAt: range }).sort({ seq: 1 }).lean();
     const exportHash = sha256(canonicalJson(records));
-    const manifest = await AuditArchiveManifestModel.create({
-      tenantId: req.user!.tenantId,
-      from: body.from,
-      to: body.to,
-      firstSeq: records[0]!.seq,
-      lastSeq: records[records.length - 1]!.seq,
-      recordCount: records.length,
-      exportHash,
-      actorUserId: req.user!.id,
-    });
-    await audit.write({
-      tenantId: req.user!.tenantId,
-      category: 'retention',
-      action: 'audit.archive_created',
-      actor: req.user!,
-      entity: { type: 'audit_archive_manifest', id: String(manifest._id) },
-      payload: { from: body.from, to: body.to, firstSeq: records[0]!.seq, lastSeq: records[records.length - 1]!.seq, recordCount: records.length, exportHash },
+    const manifest = await withMongoTransaction(async () => {
+      const created = await AuditArchiveManifestModel.create({
+        tenantId: req.user!.tenantId,
+        from: body.from,
+        to: body.to,
+        firstSeq: records[0]!.seq,
+        lastSeq: records[records.length - 1]!.seq,
+        recordCount: records.length,
+        exportHash,
+        actorUserId: req.user!.id,
+      });
+      await audit.write({
+        tenantId: req.user!.tenantId,
+        category: 'retention',
+        action: 'audit.archive_created',
+        actor: req.user!,
+        entity: { type: 'audit_archive_manifest', id: String(created._id) },
+        payload: { from: body.from, to: body.to, firstSeq: records[0]!.seq, lastSeq: records[records.length - 1]!.seq, recordCount: records.length, exportHash },
+      });
+      return created;
     });
     ok(res, { manifest: manifest.toObject(), records }, 201);
   },

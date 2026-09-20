@@ -15,6 +15,7 @@ vi.mock('../../lib/firebase', () => ({
 
 import { app, login, seeded } from '../../tests/helpers';
 import { AuditLogModel } from '../audit/model';
+import { PersonaModel } from '../personas/model';
 import { TenantModel } from '../tenants/model';
 import { UserModel } from '../users/model';
 import { SessionModel } from './model';
@@ -160,5 +161,64 @@ describe('SSO via Firebase OIDC/OAuth providers [FR-03, SEC-03]', () => {
     expect((await request(app).patch('/api/v1/system/tenant').set(sysadmin).send({ unknown: 1 })).status).toBe(400);
     expect((await request(app).get('/api/v1/system/tenant').set(await login('admin@dev.local'))).status).toBe(403);
     expect((await request(app).patch('/api/v1/system/tenant').set(sysadmin).send({ sessionPolicy: { idleTimeoutMin: 60 } })).status).toBe(400);
+  });
+
+  it('uses the tenant-configured sector vocabulary across settings and content APIs [NFR-04, NFR-08]', async () => {
+    const sysadmin = await login('sysadmin@dev.local');
+    const configured = await request(app)
+      .patch('/api/v1/system/tenant')
+      .set(sysadmin)
+      .send({ sectors: ['financial', 'healthcare', 'it', 'energy'] });
+    expect(configured.status).toBe(200);
+    expect(configured.body.data.sectors).toEqual(['financial', 'healthcare', 'it', 'energy']);
+
+    const admin = await login('admin@dev.local');
+    const me = await request(app).get('/api/v1/me').set(admin);
+    expect(me.body.data.tenant.sectors).toEqual(['financial', 'healthcare', 'it', 'energy']);
+    const persona = {
+      key: 'energy_operator',
+      name: 'Energy operator',
+      sector: 'energy',
+      description: 'Owns operational energy risk intake.',
+    };
+    const created = await request(app).post('/api/v1/personas').set(admin).send(persona);
+    expect(created.status).toBe(201);
+    expect(created.body.data.sector).toBe('energy');
+
+    const unknown = await request(app).post('/api/v1/personas').set(admin).send({ ...persona, key: 'space_operator', sector: 'space' });
+    expect(unknown.status).toBe(400);
+    expect(unknown.body.error.message).toContain('not configured');
+
+    const removeInUse = await request(app).patch('/api/v1/system/tenant').set(sysadmin).send({ sectors: ['financial', 'healthcare', 'it'] });
+    expect(removeInUse.status).toBe(409);
+    expect(removeInUse.body.error.message).toContain('energy');
+  });
+
+  it('serializes a concurrent sector removal against a new content reference [NFR-04, NFR-08]', async () => {
+    const sysadmin = await login('sysadmin@dev.local');
+    const admin = await login('admin@dev.local');
+    expect((await request(app)
+      .patch('/api/v1/system/tenant')
+      .set(sysadmin)
+      .send({ sectors: ['financial', 'healthcare', 'it', 'general', 'energy'] })).status).toBe(200);
+
+    const create = request(app).post('/api/v1/personas').set(admin).send({
+      key: 'concurrent_energy_operator',
+      name: 'Concurrent energy operator',
+      sector: 'energy',
+      description: 'Owns energy-sector incidents created during a vocabulary update.',
+    });
+    const remove = request(app)
+      .patch('/api/v1/system/tenant')
+      .set(sysadmin)
+      .send({ sectors: ['financial', 'healthcare', 'it', 'general'] });
+    const [created, removed] = await Promise.all([create, remove]);
+
+    expect([[201, 409], [400, 200]]).toContainEqual([created.status, removed.status]);
+    const tenant = await TenantModel.findOne({ slug: 'tac' }).lean();
+    const persona = await PersonaModel.findOne({ tenantId: tenant!._id, key: 'concurrent_energy_operator' }).lean();
+    // The invariant must hold regardless of which transaction wins: a persisted reference implies
+    // that its sector remains configured, while successful removal implies no reference survived.
+    expect(Boolean(persona)).toBe(tenant!.sectors.includes('energy'));
   });
 });

@@ -1,5 +1,5 @@
 import { randomInt, randomUUID } from 'node:crypto';
-import { env, isProd } from '../../config/env';
+import { env } from '../../config/env';
 import { withMongoTransaction } from '../../lib/db';
 import { AppError } from '../../lib/errors';
 import { sha256 } from '../../lib/hash';
@@ -8,6 +8,7 @@ import type { AuthUser } from '../../middleware/auth';
 import { audit } from '../audit/service';
 import { UserModel } from '../users/model';
 import { OtpCodeModel, OtpIssueLockModel } from './otp.model';
+import { allowsNonProductionDemoShortcut, mayExposeOtpDevCode } from './policy';
 
 const RESEND_COOLDOWN_MS = 60_000;
 const MAX_PER_HOUR = 5;
@@ -54,11 +55,7 @@ export const otpService = {
   async request(user: AuthUser) {
     const issueLock = await acquireIssueLock(user);
     try {
-      const isDemoUser =
-        user.email.endsWith('@dev.local') ||
-        user.email.endsWith('@paid.local') ||
-        user.email.endsWith('@tac.local') ||
-        user.email.includes('.demo@');
+      const isDemoUser = allowsNonProductionDemoShortcut(user.email);
 
       const maxPerHour = isDemoUser ? 200 : MAX_PER_HOUR;
       const resendCooldown = isDemoUser ? 3_000 : RESEND_COOLDOWN_MS;
@@ -114,7 +111,7 @@ export const otpService = {
       return {
         sentTo: maskEmail(user.email),
         expiresAt,
-        ...((mail.provider === 'console' && !isProd) || isDemoUser ? { devCode: code } : {}),
+        ...(mayExposeOtpDevCode(mail.provider, user.email) ? { devCode: code } : {}),
       };
     } finally {
       // Match the token as well as the deterministic id so an expired/replaced lock can never be

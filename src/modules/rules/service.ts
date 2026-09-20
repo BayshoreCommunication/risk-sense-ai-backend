@@ -10,6 +10,7 @@ import { CLASSIFICATIONS, type Classification } from '../shared/enums';
 import type { RuleLike } from './engine';
 import { RuleModel } from './model';
 import type { RuleBody, RuleListQuery, RulePatch } from './schema';
+import { guardConfiguredSectorReferences } from '../tenants/sectors';
 
 async function load(tenantId: string, id: string) {
   if (!Types.ObjectId.isValid(id)) throw notFound('rule');
@@ -36,23 +37,28 @@ export const rulesService = {
   },
 
   async create(tenantId: string, body: RuleBody, actor: AuthUser) {
-    if (await RuleModel.exists({ tenantId, key: body.key })) throw new AppError('CONFLICT', `rule key "${body.key}" already exists`);
-    const doc = await RuleModel.create({
-      ...body,
-      tenantId,
-      versionGroupId: new Types.ObjectId(),
-      version: 1,
-      isCurrent: false,
-      status: 'draft',
-      createdBy: actor.id,
+    return withMongoTransaction(async () => {
+      await guardConfiguredSectorReferences(tenantId, body.sectors);
+      if (await RuleModel.exists({ tenantId, key: body.key })) throw new AppError('CONFLICT', `rule key "${body.key}" already exists`);
+      const doc = await RuleModel.create({
+        ...body,
+        tenantId,
+        versionGroupId: new Types.ObjectId(),
+        version: 1,
+        isCurrent: false,
+        status: 'draft',
+        createdBy: actor.id,
+      });
+      await write(tenantId, 'rule.created', actor, String(doc._id), { key: body.key, forcedClassification: body.forcedClassification });
+      return doc;
     });
-    await write(tenantId, 'rule.created', actor, String(doc._id), { key: body.key, forcedClassification: body.forcedClassification });
-    return doc;
   },
 
   /** Draft/approved edits reset approval. Active rules are copied so the effective version stays live (AI-05). */
   async update(tenantId: string, id: string, patch: z.infer<typeof RulePatch>, actor: AuthUser) {
+    return withMongoTransaction(async () => {
     const doc = await load(tenantId, id);
+    await guardConfiguredSectorReferences(tenantId, patch.sectors ?? doc.sectors);
     if (doc.status === 'retired') throw new AppError('CONFLICT', 'retired rules cannot be edited');
     const changed = Object.keys(patch);
 
@@ -98,9 +104,11 @@ export const rulesService = {
     await doc.save();
     await write(tenantId, 'rule.updated', actor, id, { changed, before: pick(before, changed), after: pick(doc.toObject(), changed), statusBefore: before.status });
     return doc;
+    });
   },
 
   async approve(tenantId: string, id: string, approver: AuthUser, changeRef: string) {
+    return withMongoTransaction(async () => {
     const doc = await load(tenantId, id);
     if (doc.status !== 'draft') throw new AppError('CONFLICT', `rule is ${doc.status}; only drafts can be approved`);
     if (String(doc.createdBy) === approver.id) throw new AppError('SELF_APPROVAL', 'a rule must be approved by an administrator other than its author (AI-05/AI-06)');
@@ -111,6 +119,7 @@ export const rulesService = {
     await doc.save();
     await write(tenantId, 'rule.approved', approver, id, { changeRef });
     return doc;
+    });
   },
 
   /** Takes effect for assessments that select a scenario after activation; existing assessments keep their snapshot. */
@@ -155,6 +164,7 @@ export const rulesService = {
   },
 
   async retire(tenantId: string, id: string, actor: AuthUser) {
+    return withMongoTransaction(async () => {
     const doc = await load(tenantId, id);
     if (doc.status === 'retired') return doc;
     doc.status = 'retired';
@@ -163,6 +173,7 @@ export const rulesService = {
     await doc.save();
     await write(tenantId, 'rule.retired', actor, id, { key: doc.key });
     return doc;
+    });
   },
 
   /** Active rules for evaluation, optionally narrowed by sector. */

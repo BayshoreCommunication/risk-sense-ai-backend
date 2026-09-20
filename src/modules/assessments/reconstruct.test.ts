@@ -122,6 +122,7 @@ describe('reconstruction from the audit log [FR-26, FR-30, SEC-07]', () => {
       id: String(tenant!._id),
       slug: tenant!.slug,
       plan: tenant!.plan,
+      sectors: tenant!.sectors,
       features: tenant!.features,
       sessionPolicy: {
         idleTimeoutMin: tenant!.sessionPolicy?.idleTimeoutMin ?? 15,

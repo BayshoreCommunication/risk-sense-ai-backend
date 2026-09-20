@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import { Router } from 'express';
 import { env, isProd } from '../config/env';
 import { AppError } from '../lib/errors';
@@ -29,7 +30,11 @@ function assertCronCaller(header: string | undefined): void {
     return;
   }
   const expected = `Bearer ${secret}`;
-  if (header !== expected) throw new AppError('FORBIDDEN', 'Invalid scheduler credentials');
+  const actualBuffer = Buffer.from(header ?? '', 'utf8');
+  const expectedBuffer = Buffer.from(expected, 'utf8');
+  if (actualBuffer.length !== expectedBuffer.length || !timingSafeEqual(actualBuffer, expectedBuffer)) {
+    throw new AppError('FORBIDDEN', 'Invalid scheduler credentials');
+  }
 }
 
 /** GET /jobs/nightly — retention (SEC-06), audit-chain verification (SEC-07), conformance scan (FR-30). */

@@ -5,9 +5,9 @@ import { conformanceService } from '../modules/conformance/service';
 import { retentionService } from '../modules/retention/service';
 
 /**
- * In-process nightly jobs (ISS-015: no Redis/BullMQ needed for one always-on Render instance).
+ * In-process nightly jobs (ISS-015: no Redis/BullMQ needed for one elected long-lived instance).
  * Enabled with JOBS_ENABLED=true; runs once per UTC day at JOBS_RETENTION_HOUR (default 02:00 UTC).
- * A Render Cron Job calling `npm run retention` is the alternative for multi-instance deployments.
+ * Vercel uses the CRON_SECRET-protected /jobs/nightly route declared in vercel.json instead.
  */
 let timer: NodeJS.Timeout | undefined;
 let lastRunDay = '';

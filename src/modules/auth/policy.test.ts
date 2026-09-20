@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { AuthTenant, AuthUser } from '../../middleware/auth';
 import type { Role } from '../users/model';
-import { allowedSessionAuthenticationMethods, requiresCurrentLoginMfa } from './policy';
+import {
+  allowedSessionAuthenticationMethods,
+  allowsNonProductionDemoShortcut,
+  mayExposeOtpDevCode,
+  requiresCurrentLoginMfa,
+} from './policy';
 
 function user(role: Role): AuthUser {
   return {
@@ -26,6 +31,7 @@ function tenant(
     id: 'tenant-id',
     slug: `${plan}-tenant`,
     plan,
+    sectors: ['financial'],
     features: {
       sso: sso.enabled,
       reviewDashboard: false,
@@ -41,6 +47,22 @@ function tenant(
 }
 
 describe('plan-first current-login MFA policy [FR-02, SEC-03]', () => {
+  it('never enables demo authentication shortcuts or plaintext OTP responses in production [FR-01, SEC-03]', () => {
+    for (const email of ['admin@dev.local', 'requestor@paid.local', 'audit@tac.local', 'user.demo@example.com']) {
+      expect(allowsNonProductionDemoShortcut(email, true), email).toBe(false);
+      expect(mayExposeOtpDevCode('resend', email, true), email).toBe(false);
+      expect(mayExposeOtpDevCode('console', email, true), email).toBe(false);
+    }
+  });
+
+  it('limits demo conveniences to recognized non-production identities [FR-01, SEC-03]', () => {
+    expect(allowsNonProductionDemoShortcut('admin@dev.local', false)).toBe(true);
+    expect(allowsNonProductionDemoShortcut('person@example.com', false)).toBe(false);
+    expect(mayExposeOtpDevCode('resend', 'admin@dev.local', false)).toBe(true);
+    expect(mayExposeOtpDevCode('resend', 'person@example.com', false)).toBe(false);
+    expect(mayExposeOtpDevCode('console', 'person@example.com', false)).toBe(true);
+  });
+
   it('does not require MFA from a FREE requestor when the stored policy is true [FR-02, SEC-03]', () => {
     const requestor = user('requestor');
     const free = tenant('free', true);

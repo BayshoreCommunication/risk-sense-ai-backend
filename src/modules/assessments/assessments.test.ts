@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { app, login, publishReviewedContent, seeded } from '../../tests/helpers';
 import { AuditLogModel } from '../audit/model';
 import { ScenarioModel } from '../scenarios/model';
+import { UserModel } from '../users/model';
 import { AssessmentModel } from './model';
 
 /**
@@ -241,6 +242,8 @@ describe('assessments — intake → submit → decision', () => {
     ]);
     expect(denied.map((r) => r.status)).toEqual([403, 403, 403]);
     expect(denied.map((r) => r.body.error.code)).toEqual(['FORBIDDEN', 'FORBIDDEN', 'FORBIDDEN']);
+    const colleagueUser = await UserModel.findOne({ email: 'colleague@paid.local' }).lean();
+    expect(await AuditLogModel.countDocuments({ action: 'access.denied', actorUserId: colleagueUser!._id, 'payload.code': 'FORBIDDEN' })).toBe(3);
 
     const stored = await AssessmentModel.findById(id).lean();
     expect(stored).toMatchObject({ personaKey: 'finance_officer', phase: 'describe', status: 'in_progress' });

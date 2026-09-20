@@ -1,7 +1,9 @@
 import { z } from 'zod';
 import { ConditionSchema } from '../shared/conditions';
-import { CLASSIFICATIONS, CONTENT_SECTORS, KEY_REGEX } from '../shared/enums';
+import { CLASSIFICATIONS, KEY_REGEX, SECTOR_KEY_REGEX } from '../shared/enums';
 import { FACTOR_KEYS } from './model';
+
+const SectorKey = z.string().regex(SECTOR_KEY_REGEX, 'lowercase snake_case sector key, 2–64 chars');
 
 const Factor = z.object({
   weight: z.number().min(0).max(100),
@@ -14,7 +16,7 @@ export const MatrixBody = z
   .object({
     key: z.string().regex(KEY_REGEX),
     name: z.string().min(2).max(160),
-    sector: z.enum(CONTENT_SECTORS).optional(),
+    sector: SectorKey.optional(),
     formula: z.literal('weighted_sum').default('weighted_sum'),
     factors: z.object(Object.fromEntries(FACTOR_KEYS.map((k) => [k, Factor])) as Record<(typeof FACTOR_KEYS)[number], typeof Factor>),
     thresholds: z.object(Object.fromEntries(CLASSIFICATIONS.map((c) => [c, Range])) as Record<(typeof CLASSIFICATIONS)[number], typeof Range>),
@@ -49,7 +51,7 @@ export const MatrixListQuery = z.object({ view: z.enum(['current', 'all']).optio
 export const SimulateBody = z.object({
   facts: z.record(z.union([z.string(), z.number(), z.boolean(), z.null()])),
   matrixId: z.string().optional(), // default: current matrix for the sector / "default"
-  sector: z.enum(CONTENT_SECTORS).optional(),
+  sector: SectorKey.optional(),
   requiredFactKeys: z.array(z.string()).default([]), // for the confidence estimate
   factConfidences: z.record(z.number().min(0).max(1)).default({}), // per fact, from extraction; defaults to 1
   includeRules: z.boolean().default(true),

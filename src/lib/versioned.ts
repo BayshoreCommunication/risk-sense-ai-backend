@@ -4,6 +4,7 @@ import { VERSION_STATUSES, type VersionStatus } from '../modules/shared/enums';
 import { AppError, notFound } from './errors';
 import type { AuthUser } from '../middleware/auth';
 import { audit } from '../modules/audit/service';
+import { withMongoTransaction } from './db';
 
 /**
  * Copy-on-write versioning (DecisionLog 2026-09-13-09, FR-09/FR-11/AI-04).
@@ -65,6 +66,7 @@ export function versioned(model: Model<any>, opts: VersionedOptions) {
 
     /** New version group (version 1, draft). `key` must be unique among current documents of the tenant. */
     async createDraft(tenantId: string, data: Record<string, any>, actor: AuthUser): Promise<Doc> {
+      return withMongoTransaction(async () => {
       const clash = await model.findOne({ tenantId, key: data.key, isCurrent: true }).lean();
       if (clash) throw new AppError('CONFLICT', `${entityType} key "${data.key}" already exists`);
       const doc = await model.create({
@@ -85,6 +87,7 @@ export function versioned(model: Model<any>, opts: VersionedOptions) {
         payload: { key: data.key },
       });
       return doc as Doc;
+      });
     },
 
     /**
@@ -92,6 +95,7 @@ export function versioned(model: Model<any>, opts: VersionedOptions) {
      * that becomes the next draft version in the same group (FR-11).
      */
     async updateAsNewVersion(tenantId: string, id: string, patch: Record<string, any>, actor: AuthUser): Promise<Doc> {
+      return withMongoTransaction(async () => {
       const current = await load(tenantId, id);
       for (const f of opts.immutable ?? []) {
         if (f in patch && patch[f] !== current[f]) {
@@ -137,10 +141,12 @@ export function versioned(model: Model<any>, opts: VersionedOptions) {
         payload: { fromVersion: current.version, fromId: id, changed },
       });
       return next as Doc;
+      });
     },
 
     /** Draft → active + current; the previously active version becomes `deactivated` but stays readable (AI-04). */
     async activate(tenantId: string, id: string, actor: AuthUser): Promise<Doc> {
+      return withMongoTransaction(async () => {
       const doc = await load(tenantId, id);
       if (doc.status === 'active') return doc;
       if (doc.status === 'deactivated') throw new AppError('CONFLICT', `${entityType} version is deactivated`);
@@ -163,10 +169,12 @@ export function versioned(model: Model<any>, opts: VersionedOptions) {
         payload: { key: doc.key, previousVersion: previous?.version ?? null },
       });
       return doc;
+      });
     },
 
     /** Removes from new sessions; historical references keep working (FR-09, FR-15). */
     async deactivate(tenantId: string, id: string, actor: AuthUser): Promise<Doc> {
+      return withMongoTransaction(async () => {
       const doc = await load(tenantId, id);
       if (doc.status === 'deactivated') return doc;
       doc.isCurrent = false;
@@ -182,6 +190,7 @@ export function versioned(model: Model<any>, opts: VersionedOptions) {
         payload: { key: doc.key },
       });
       return doc;
+      });
     },
 
     /** Current (active) documents only — what the chatbot and requestors see. */

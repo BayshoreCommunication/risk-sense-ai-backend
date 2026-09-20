@@ -17,6 +17,8 @@ import { UserModel } from '../users/model';
 import { DatasetModel } from './model';
 import { parseUpload, type ParsedContent, type RowError } from './parse';
 import { TEMPLATE_VERSION } from './template';
+import { TenantModel } from '../tenants/model';
+import { guardTenantSectorVocabulary } from '../tenants/sectors';
 
 async function load(tenantId: string, id: string) {
   if (!Types.ObjectId.isValid(id)) throw notFound('dataset');
@@ -68,11 +70,14 @@ async function crossValidate(tenantId: string, parsed: ParsedContent): Promise<R
   const fileScenarios = new Set(parsed.scenarios.map((s) => s.body.key));
   const fileQuestions = new Map(parsed.questions.map((q) => [q.body.key, q.body]));
 
-  const [dbPersonas, dbQuestions, dbScenarios] = await Promise.all([
+  const [dbPersonas, dbQuestions, dbScenarios, tenant] = await Promise.all([
     PersonaModel.find({ tenantId, isCurrent: true, status: 'active' }).select('key').lean(),
     QuestionModel.find({ tenantId, status: 'active' }).select('key factKey branchTrigger').lean(),
     ScenarioModel.find({ tenantId, isCurrent: true, status: 'active' }).select('key').lean(),
+    TenantModel.findById(tenantId).select('sectors').lean(),
   ]);
+  if (!tenant) throw new AppError('NOT_FOUND', 'tenant');
+  const configuredSectors = new Set(tenant.sectors);
   const personaKnown = (k: string) => filePersonas.has(k) || dbPersonas.some((p) => p.key === k);
   const scenarioKnown = (k: string) => fileScenarios.has(k) || dbScenarios.some((s) => s.key === k);
   const questionInfo = (k: string) => {
@@ -83,11 +88,13 @@ async function crossValidate(tenantId: string, parsed: ParsedContent): Promise<R
   };
 
   for (const p of parsed.personas) {
+    if (!configuredSectors.has(p.body.sector)) errors.push({ sheet: 'personas', row: p.row, column: 'sector', message: `sector "${p.body.sector}" is not configured for this tenant` });
     if (p.body.defaultScenarioKey && !scenarioKnown(p.body.defaultScenarioKey)) {
       errors.push({ sheet: 'personas', row: p.row, column: 'default_scenario_key', message: `scenario "${p.body.defaultScenarioKey}" not in file or database` });
     }
   }
   for (const q of parsed.questions) {
+    for (const sector of q.body.tags.sectors) if (!configuredSectors.has(sector)) errors.push({ sheet: 'questions', row: q.row, column: 'sectors', message: `sector "${sector}" is not configured for this tenant` });
     for (const pk of q.body.tags.personaKeys) if (!personaKnown(pk)) errors.push({ sheet: 'questions', row: q.row, column: 'persona_keys', message: `persona "${pk}" not in file or database` });
     for (const sk of q.body.tags.scenarioKeys) if (!scenarioKnown(sk)) errors.push({ sheet: 'questions', row: q.row, column: 'scenario_keys', message: `scenario "${sk}" not in file or database` });
     for (const bk of q.body.branchTrigger?.questionKeys ?? []) if (!questionInfo(bk)) errors.push({ sheet: 'questions', row: q.row, column: 'branch_question_keys', message: `question "${bk}" not in file or database` });
@@ -128,6 +135,31 @@ async function crossValidate(tenantId: string, parsed: ParsedContent): Promise<R
   return errors;
 }
 
+function sectorMembershipErrors(parsed: ParsedContent, configuredSectors: readonly string[]): RowError[] {
+  const configured = new Set(configuredSectors);
+  const errors: RowError[] = [];
+  for (const persona of parsed.personas) {
+    if (!configured.has(persona.body.sector)) {
+      errors.push({ sheet: 'personas', row: persona.row, column: 'sector', message: `sector "${persona.body.sector}" is not configured for this tenant` });
+    }
+  }
+  for (const question of parsed.questions) {
+    for (const sector of question.body.tags.sectors) {
+      if (!configured.has(sector)) {
+        errors.push({ sheet: 'questions', row: question.row, column: 'sectors', message: `sector "${sector}" is not configured for this tenant` });
+      }
+    }
+  }
+  return errors;
+}
+
+function referencedSectors(parsed: ParsedContent): string[] {
+  return [...new Set([
+    ...parsed.personas.map((persona) => persona.body.sector),
+    ...parsed.questions.flatMap((question) => question.body.tags.sectors),
+  ])];
+}
+
 export const datasetsService = {
   async list(tenantId: string) {
     const datasets = await DatasetModel.find({ tenantId }).sort({ seq: -1 }).select('-content').lean();
@@ -142,7 +174,15 @@ export const datasetsService = {
   /** Parse + validate + store. Status `validated` (ready for review) or `rejected` (row errors). Never applies anything. */
   async upload(tenantId: string, input: { fileName: string; buffer?: Buffer; json?: unknown }, actor: AuthUser) {
     const parsed = await parseUpload(input);
-    const errors = [...parsed.errors, ...(parsed.errors.length ? [] : await crossValidate(tenantId, parsed))];
+    const preflightErrors = [...parsed.errors, ...(parsed.errors.length ? [] : await crossValidate(tenantId, parsed))];
+    return withMongoTransaction(async () => {
+    // A validated upload is a pending sector reference because it may later be approved/activated.
+    // Re-lock and revalidate in the same transaction that stores it so concurrent removal cannot
+    // strand reviewed content. Rejected uploads do not participate in the removal invariant.
+    const errors = [...preflightErrors];
+    if (errors.length === 0 && referencedSectors(parsed).length > 0) {
+      errors.push(...sectorMembershipErrors(parsed, await guardTenantSectorVocabulary(tenantId)));
+    }
     const last = await DatasetModel.findOne({ tenantId }).sort({ seq: -1 }).select('seq').lean();
     const { errors: _e, ...content } = parsed;
     const doc = await DatasetModel.create({
@@ -172,10 +212,12 @@ export const datasetsService = {
       payload: { fileName: input.fileName, counts: doc.counts, errorCount: errors.length },
     });
     return doc;
+    });
   },
 
   /** Four-eyes: the reviewer must not be the author (AI-06). */
   async approve(tenantId: string, id: string, reviewer: AuthUser) {
+    return withMongoTransaction(async () => {
     const doc = await load(tenantId, id);
     if (doc.status !== 'validated') throw new AppError('CONFLICT', `dataset is ${doc.status}; only validated datasets can be approved`);
     if (String(doc.authorId) === reviewer.id) throw new AppError('SELF_APPROVAL', 'A dataset must be approved by an administrator other than its author (AI-06)');
@@ -185,6 +227,7 @@ export const datasetsService = {
     await doc.save();
     await audit.write({ tenantId, category: 'dataset', action: 'dataset.approved', actor: reviewer, entity: { type: 'dataset', id, version: doc.seq }, payload: { authorId: String(doc.authorId) } });
     return doc;
+    });
   },
 
   /** Applies all reviewed content and its audit trail in one MongoDB transaction (FR-13). */
@@ -270,14 +313,16 @@ export const datasetsService = {
       const failure = err instanceof Error ? err.message : String(err);
       const applied = emptyApplied();
       // The content transaction has rolled back. Persist only the deterministic failure outcome afterward.
-      const failed = await DatasetModel.findOneAndUpdate(
-        { _id: id, tenantId, status: 'approved' },
-        { $set: { status: 'failed', failure, applied } },
-        { new: true },
-      );
-      if (failed) {
-        await audit.write({ tenantId, category: 'dataset', action: 'dataset.failed', actor, entity: { type: 'dataset', id, version: failed.seq }, payload: { failure, applied } });
-      }
+      await withMongoTransaction(async () => {
+        const failed = await DatasetModel.findOneAndUpdate(
+          { _id: id, tenantId, status: 'approved' },
+          { $set: { status: 'failed', failure, applied } },
+          { new: true },
+        );
+        if (failed) {
+          await audit.write({ tenantId, category: 'dataset', action: 'dataset.failed', actor, entity: { type: 'dataset', id, version: failed.seq }, payload: { failure, applied } });
+        }
+      });
       throw err;
     }
   },

@@ -10,6 +10,23 @@ export interface Mail {
 }
 
 /**
+ * Resend's sandbox identity can deliver only to its owning account. Keep the local redirect useful
+ * for non-production demos, but fail closed if production configuration ever bypasses env validation.
+ */
+export function resolveResendRecipient(
+  recipient: string,
+  sender: string,
+  production = isProd,
+): string {
+  const isSandboxSender = /onboarding@resend\.dev\b/i.test(sender);
+  if (!isSandboxSender) return recipient;
+  if (production) {
+    throw new AppError('MAIL_SEND_FAILED', 'Resend sandbox sender is forbidden in production');
+  }
+  return recipient === 'coderaise247@gmail.com' ? recipient : 'coderaise247@gmail.com';
+}
+
+/**
  * Minimal mail transport behind one function so the OTP flow (T-016) does not depend on a vendor.
  *   MAIL_PROVIDER=console → log only (development/test)
  *   MAIL_PROVIDER=resend  → Resend REST API (RESEND_API_KEY, MAIL_FROM)
@@ -19,10 +36,7 @@ export async function sendMail(mail: Mail): Promise<{ provider: string; id?: str
   switch (env.MAIL_PROVIDER) {
     case 'resend': {
       if (!env.RESEND_API_KEY) throw new Error('RESEND_API_KEY is not set');
-      const isSandboxSender = env.MAIL_FROM.includes('onboarding@resend.dev');
-      const targetRecipient = isSandboxSender && mail.to !== 'coderaise247@gmail.com'
-        ? 'coderaise247@gmail.com'
-        : mail.to;
+      const targetRecipient = resolveResendRecipient(mail.to, env.MAIL_FROM);
       const res = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },

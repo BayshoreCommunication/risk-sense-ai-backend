@@ -1,7 +1,9 @@
 import request from 'supertest';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { app, login, seeded } from '../../tests/helpers';
 import { AuditLogModel } from '../audit/model';
+import { audit } from '../audit/service';
+import { QuestionModel } from './model';
 
 const base = {
   key: 'fin_q06_fraud_suspected',
@@ -22,6 +24,8 @@ describe('questions (FR-15, FR-07)', () => {
     admin = await login('admin@dev.local');
     auditor = await login('audit@dev.local');
   });
+
+  afterEach(() => vi.restoreAllMocks());
 
   it('creates a tagged question with a branch trigger; auditor can read, not write [FR-15, SEC-01]', async () => {
     const res = await request(app).post('/api/v1/questions').set(admin).send(base);
@@ -56,6 +60,16 @@ describe('questions (FR-15, FR-07)', () => {
     expect(okMcq.status).toBe(201);
   });
 
+  it('rejects question tags outside the tenant sector vocabulary [FR-15, NFR-04]', async () => {
+    const response = await request(app)
+      .post('/api/v1/questions')
+      .set(admin)
+      .send({ ...base, tags: { ...base.tags, sectors: ['energy'] } });
+    expect(response.status).toBe(400);
+    expect(response.body.error.message).toContain('not configured');
+    expect(await QuestionModel.countDocuments({ key: base.key })).toBe(0);
+  });
+
   it('update is in place and audited with before/after [FR-25]', async () => {
     const created = await request(app).post('/api/v1/questions').set(admin).send(base);
     const id = created.body.data._id;
@@ -65,6 +79,30 @@ describe('questions (FR-15, FR-07)', () => {
     const entry = await AuditLogModel.findOne({ action: 'question.updated' }).lean();
     expect(entry?.payload).toMatchObject({ changed: ['text'] });
     expect((entry?.payload as { before: { text: string } }).before.text).toBe(base.text);
+  });
+
+  it('rolls back question create, update and retirement when audit evidence fails [FR-15, FR-25, SEC-07]', async () => {
+    const writeAudit = audit.write.bind(audit);
+    let failAction = 'question.created';
+    const writeSpy = vi.spyOn(audit, 'write').mockImplementation(async (entry) => {
+      if (entry.action === failAction) throw new Error(`forced ${entry.action} audit failure`);
+      return writeAudit(entry);
+    });
+
+    expect((await request(app).post('/api/v1/questions').set(admin).send(base)).status).toBe(500);
+    expect(await QuestionModel.countDocuments({ key: base.key })).toBe(0);
+    failAction = '';
+    const created = await request(app).post('/api/v1/questions').set(admin).send(base);
+    const id = created.body.data._id as string;
+
+    failAction = 'question.updated';
+    expect((await request(app).patch(`/api/v1/questions/${id}`).set(admin).send({ text: 'Uncommitted text' })).status).toBe(500);
+    expect((await QuestionModel.findById(id).lean())?.text).toBe(base.text);
+
+    failAction = 'question.retired';
+    expect((await request(app).post(`/api/v1/questions/${id}/retire`).set(admin)).status).toBe(500);
+    expect((await QuestionModel.findById(id).lean())?.status).toBe('active');
+    writeSpy.mockRestore();
   });
 
   it('retire keeps the document, hides it from active listings, blocks edits [FR-15]', async () => {

@@ -6,7 +6,7 @@ import { ok } from '../../lib/http';
 
 export const healthRouter = Router();
 
-/** GET /health — unauthenticated liveness/readiness (Render health check, NFR-05). */
+/** GET /health — unauthenticated aggregate liveness/readiness for deployment probes (NFR-05). */
 healthRouter.get('/', (_req, res) => {
   const db = dbStatus();
   const body = {
@@ -21,12 +21,12 @@ healthRouter.get('/', (_req, res) => {
   ok(res, body, db === 'connected' ? 200 : 503);
 });
 
-/** GET /health/live — process is up (no dependencies). Render/UptimeRobot liveness. */
+/** GET /health/live — process is up (no dependencies); suitable for platform or external liveness probes. */
 healthRouter.get('/live', (_req, res) => {
   ok(res, { status: 'ok', uptimeSec: Math.round(process.uptime()) });
 });
 
-/** GET /health/ready — database reachable (actual ping, not just the driver state). Use as the Render health check path. */
+/** GET /health/ready — database reachable (actual ping, not just the driver state); use for readiness probes. */
 healthRouter.get('/ready', async (_req, res) => {
   const t0 = Date.now();
   try {

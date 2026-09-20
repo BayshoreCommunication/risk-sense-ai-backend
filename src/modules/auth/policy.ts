@@ -1,5 +1,26 @@
+import { isProd } from '../../config/env';
 import type { AuthTenant, AuthUser } from '../../middleware/auth';
 import type { SessionAuthenticationMethod } from './model';
+
+/**
+ * Seeded/demo identities may use small local conveniences, but an email-shaped naming convention
+ * must never weaken a production authentication control (FR-01, SEC-03).
+ */
+export function allowsNonProductionDemoShortcut(email: string, production = isProd): boolean {
+  if (production) return false;
+  const normalized = email.toLowerCase();
+  return (
+    normalized.endsWith('@dev.local') ||
+    normalized.endsWith('@paid.local') ||
+    normalized.endsWith('@tac.local') ||
+    normalized.includes('.demo@')
+  );
+}
+
+/** Plaintext OTPs are diagnostic data and can only be exposed outside production. */
+export function mayExposeOtpDevCode(provider: string, email: string, production = isProd): boolean {
+  return !production && (provider === 'console' || allowsNonProductionDemoShortcut(email, production));
+}
 
 /**
  * Whether this account must prove a second factor for the application session being used now.

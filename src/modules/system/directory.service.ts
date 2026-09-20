@@ -85,6 +85,7 @@ export const directoryService = {
   },
 
   async createUser(tenantId: string, body: SystemUserCreate, actor: AuthUser) {
+    return withMongoTransaction(async () => {
     await validatePlanRole(tenantId, body.role);
     const departmentIds = await validateDepartments(tenantId, body.departmentIds);
     validateRoleScope(body.role, departmentIds, body.crossDepartmentAccess);
@@ -106,6 +107,7 @@ export const directoryService = {
     }
     await audit.write({ tenantId, category: 'config', action: 'user.created', actor, entity: { type: 'user', id: String(user._id) }, payload: userView(user) });
     return userView(user);
+    });
   },
 
   async updateUser(tenantId: string, id: string, body: SystemUserPatch, actor: AuthUser) {
@@ -141,6 +143,7 @@ export const directoryService = {
   },
 
   async createDepartment(tenantId: string, body: SystemDepartmentCreate, actor: AuthUser) {
+    return withMongoTransaction(async () => {
     const personaIds = await validatePersonas(tenantId, body.personaIds);
     let department;
     try {
@@ -151,9 +154,11 @@ export const directoryService = {
     }
     await audit.write({ tenantId, category: 'config', action: 'department.created', actor, entity: { type: 'department', id: String(department._id) }, payload: departmentView(department) });
     return departmentView(department);
+    });
   },
 
   async updateDepartment(tenantId: string, id: string, body: SystemDepartmentPatch, actor: AuthUser) {
+    return withMongoTransaction(async () => {
     const department = await DepartmentModel.findOne({ _id: id, tenantId });
     if (!department) throw notFound('department');
     const before = departmentView(department);
@@ -168,5 +173,6 @@ export const directoryService = {
     const after = departmentView(department);
     await audit.write({ tenantId, category: 'config', action: 'department.updated', actor, entity: { type: 'department', id }, payload: { before, after, changed: Object.keys(body) } });
     return after;
+    });
   },
 };

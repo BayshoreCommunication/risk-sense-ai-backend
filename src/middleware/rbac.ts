@@ -9,7 +9,7 @@ import { audit } from '../modules/audit/service';
  * Current-login MFA assurance is enforced for every protected request by session middleware.
  */
 export function requireRole(...roles: Role[]): RequestHandler {
-  return async (req, _res, next) => {
+  return async (req, res, next) => {
     const user = req.user;
     if (!user) throw new AppError('UNAUTHENTICATED');
     if (!roles.includes(user.role)) {
@@ -19,8 +19,11 @@ export function requireRole(...roles: Role[]): RequestHandler {
         action: 'access.denied',
         actor: user,
         entity: { type: 'route', id: `${req.method} ${req.baseUrl}${req.path}` },
-        payload: { requiredRoles: roles },
+        payload: { code: 'FORBIDDEN', requiredRoles: roles },
       });
+      // The central error handler audits service-level denials. Mark this middleware denial so it
+      // remains one append-only event rather than two.
+      res.locals.accessDenialAudited = true;
       throw new AppError('FORBIDDEN', 'Role not permitted');
     }
     next();

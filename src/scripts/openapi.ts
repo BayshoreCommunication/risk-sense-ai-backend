@@ -56,12 +56,22 @@ const AuthTenant = z
       departmentMapping: z.boolean(),
       blockConcurrentLogin: z.boolean(),
     }),
+    sectors: z.array(z.string()),
     sessionPolicy: z.object({ idleTimeoutMin: z.number(), maxConcurrentSessions: z.number() }),
   })
   .openapi('AuthTenant');
 
 const bearer = registry.registerComponent('securitySchemes', 'bearerAuth', { type: 'http', scheme: 'bearer' });
 const sessionHeader = registry.registerComponent('securitySchemes', 'sessionId', { type: 'apiKey', in: 'header', name: 'X-Session-Id' });
+const cronSecret = registry.registerComponent('securitySchemes', 'cronSecret', { type: 'http', scheme: 'bearer', description: 'Vercel Cron shared secret; not a user token' });
+const NightlySummary = z.object({
+  ranAt: z.string().datetime(),
+  durationMs: z.number().int().nonnegative(),
+  retention: z.array(z.object({ tenant: z.string(), flagged: z.number().int().nonnegative(), reduced: z.number().int().nonnegative(), archived: z.number().int().nonnegative() })),
+  auditChains: z.array(z.object({ tenantId: z.string(), slug: z.string(), ok: z.boolean(), firstBadSeq: z.number().int().positive().optional() })),
+  conformance: z.array(z.object({ tenant: z.string(), scanned: z.number().int().nonnegative(), flagged: z.number().int().nonnegative() })),
+  brokenChains: z.array(z.string()),
+});
 
 registry.registerPath({
   method: 'get',
@@ -81,12 +91,25 @@ registry.registerPath({ method: 'get', path: '/health/live', responses: { 200: {
 registry.registerPath({ method: 'get', path: '/health/ready', responses: { 200: { description: 'Database readiness with a live ping', content: { 'application/json': { schema: Envelope(z.object({ status: z.literal('ok'), db: z.literal('connected'), dbPingMs: z.number() })) } } }, 503: { description: 'Database is not ready', content: { 'application/json': { schema: Envelope(z.object({ status: z.literal('degraded'), db: z.string(), dbPingMs: z.number() })) } } } } });
 
 registry.registerPath({
+  method: 'get',
+  path: '/jobs/nightly',
+  security: [{ [cronSecret.name]: [] }],
+  responses: {
+    200: {
+      description: 'Scheduled retention, audit-chain verification, and conformance summary (SEC-06, SEC-07, FR-30)',
+      content: { 'application/json': { schema: Envelope(NightlySummary) } },
+    },
+    403: { description: 'Missing or invalid scheduler credential', content: { 'application/json': { schema: ErrorEnvelope } } },
+  },
+});
+
+registry.registerPath({
   method: 'post',
   path: '/auth/otp/request',
   security: [{ [bearer.name]: [] }],
   responses: {
     200: {
-      description: 'Code emailed (devCode only outside production with the console mail provider)',
+      description: 'Code emailed (devCode is never returned in production; non-production console/demo flows may return it)',
       content: {
         'application/json': {
           schema: Envelope(z.object({ sentTo: z.string(), expiresAt: z.string().datetime(), devCode: z.string().optional() })),
@@ -287,7 +310,7 @@ registry.registerPath({ method: 'get', path: '/reports/{type}/export', security:
 registry.registerPath({ method: 'get', path: '/analytics/trends', security: secured, request: { query: TrendsQuery }, responses: { 200: { description: 'Trend rows per period × department | persona | scenario (FR-27, DASH-03)', content: { 'application/json': { schema: Envelope(ReportResult) } } } } });
 
 registry.registerPath({ method: 'get', path: '/auth/sso/lookup', request: { query: SsoLookupQuery }, responses: { 200: { description: 'SSO provider for the email domain (FR-03); providerId null when none', content: { 'application/json': { schema: Envelope(z.object({ providerId: z.string().nullable(), tenant: z.string().nullable() })) } } } } });
-const TenantSettings = z.object({ _id: z.string(), name: z.string(), slug: z.string(), plan: z.enum(TENANT_PLANS), features: AuthTenant.shape.features, sso: z.object({ providerId: z.string().nullable(), domain: z.string().nullable() }), authPolicy: z.object({ otpRequired: z.boolean() }), sessionPolicy: z.object({ idleTimeoutMin: z.number(), maxConcurrentSessions: z.number() }), retentionPolicy: z.object({ assessmentDays: z.number(), auditDays: z.number(), evidenceDays: z.number(), datasetHistoryDays: z.number() }), updatedAt: z.string().optional() }).openapi('TenantSettings');
+const TenantSettings = z.object({ _id: z.string(), name: z.string(), slug: z.string(), plan: z.enum(TENANT_PLANS), features: AuthTenant.shape.features, sectors: z.array(z.string()), sso: z.object({ providerId: z.string().nullable(), domain: z.string().nullable() }), authPolicy: z.object({ otpRequired: z.boolean() }), sessionPolicy: z.object({ idleTimeoutMin: z.number(), maxConcurrentSessions: z.number() }), retentionPolicy: z.object({ assessmentDays: z.number(), auditDays: z.number(), evidenceDays: z.number(), datasetHistoryDays: z.number() }), updatedAt: z.string().optional() }).openapi('TenantSettings');
 registry.registerPath({ method: 'get', path: '/system/tenant', security: secured, responses: { 200: { description: 'Tenant settings (system_administrator)', content: { 'application/json': { schema: Envelope(TenantSettings) } } } } });
 registry.registerPath({ method: 'patch', path: '/system/tenant', security: secured, request: { body: { content: { 'application/json': { schema: TenantPatch } } } }, responses: { 200: { description: 'Updated settings; audited as config/tenant.updated', content: { 'application/json': { schema: Envelope(TenantSettings) } } } } });
 

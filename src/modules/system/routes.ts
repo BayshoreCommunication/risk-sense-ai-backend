@@ -14,6 +14,11 @@ import { UserModel } from '../users/model';
 import { ConformanceFlagsQuery, DrStatusPatch, SystemDepartmentCreate, SystemDepartmentPatch, SystemIdParams, SystemUserCreate, SystemUserPatch, TenantPatch } from './schema';
 import { directoryService } from './directory.service';
 import { DrStatusModel, FIXED_DR_TARGETS } from './dr.model';
+import { PersonaModel } from '../personas/model';
+import { QuestionModel } from '../questions/model';
+import { RuleModel } from '../rules/model';
+import { ScoringMatrixModel } from '../scoring/model';
+import { DatasetModel } from '../datasets/model';
 
 /** System administrator (Bayshore) — tenant configuration. All changes are audited as config changes (FR-25). */
 export const systemRouter = Router();
@@ -125,6 +130,7 @@ const view = (t: HydratedDocument<Tenant>) => ({
   name: t.name,
   slug: t.slug,
   plan: t.plan,
+  sectors: t.sectors,
   features: t.features,
   sso: { providerId: t.sso?.providerId ?? null, domain: t.sso?.domain ?? null },
   // The plan is the effective MFA policy; hide any contradictory legacy stored value.
@@ -147,32 +153,60 @@ systemRouter.get('/tenant', async (req, res) => {
  */
 systemRouter.patch('/tenant', validate({ body: TenantPatch }), async (req, res) => {
   const body = req.body as TenantPatch;
-  const t = await TenantModel.findById(req.user!.tenantId);
-  if (!t) throw new AppError('NOT_FOUND', 'tenant');
-  const before = view(t);
-  if (body.plan === 'free' && t.plan !== 'free') {
-    const managedAccount = await UserModel.exists({ tenantId: t._id, role: { $ne: 'requestor' } });
-    if (managedAccount) throw new AppError('CONFLICT', 'Remove or convert managed-role accounts before changing this tenant to FREE');
-  }
-  if (body.name) t.name = body.name;
-  if (body.plan) t.plan = body.plan;
-  if (body.features) Object.assign(t.features, body.features);
-  if (body.sso) {
-    if (body.sso.domain) {
-      const clash = await TenantModel.findOne({ _id: { $ne: t._id }, 'sso.domain': body.sso.domain.toLowerCase() }).lean();
-      if (clash) throw new AppError('CONFLICT', `domain ${body.sso.domain} is already claimed by another tenant`);
+  const after = await withMongoTransaction(async () => {
+    const t = await TenantModel.findById(req.user!.tenantId);
+    if (!t) throw new AppError('NOT_FOUND', 'tenant');
+    const before = view(t);
+    if (body.plan === 'free' && t.plan !== 'free') {
+      const managedAccount = await UserModel.exists({ tenantId: t._id, role: { $ne: 'requestor' } });
+      if (managedAccount) throw new AppError('CONFLICT', 'Remove or convert managed-role accounts before changing this tenant to FREE');
     }
-    t.set('sso', { providerId: body.sso.providerId ?? undefined, domain: body.sso.domain?.toLowerCase() ?? undefined });
-  }
-  // Keep accepting the legacy field so older clients do not break, but normalize storage to the
-  // tier invariant instead of allowing this compatibility input to weaken or strengthen it.
-  t.set('authPolicy.otpRequired', t.plan === 'paid');
-  if (body.sessionPolicy) for (const [k, v] of Object.entries(body.sessionPolicy)) if (v !== undefined) t.set(`sessionPolicy.${k}`, v);
-  if (body.retentionPolicy) for (const [k, v] of Object.entries(body.retentionPolicy)) if (v !== undefined) t.set(`retentionPolicy.${k}`, v);
-  const wantsSso = (body.features?.sso ?? t.features.sso) === true;
-  if (wantsSso && !(t.sso?.providerId && t.sso?.domain)) throw new AppError('VALIDATION_ERROR', 'enabling SSO needs sso.providerId and sso.domain');
-  await t.save();
-  const after = view(t);
-  await audit.write({ tenantId: req.user!.tenantId, category: 'config', action: 'tenant.updated', actor: req.user!, entity: { type: 'tenant', id: String(t._id) }, payload: { before, after, changed: Object.keys(body) } });
+    if (body.sectors) {
+      const retained = new Set(body.sectors);
+      const removed = t.sectors.filter((sector) => !retained.has(sector));
+      if (removed.length) {
+        // Mongoose transactions must not run operations in parallel on one session. These reads
+        // follow the tenant-row read that sector-referencing writers also touch, closing write skew.
+        const persona = await PersonaModel.exists({ tenantId: t._id, sector: { $in: removed } });
+        const question = await QuestionModel.exists({ tenantId: t._id, 'tags.sectors': { $in: removed } });
+        const rule = await RuleModel.exists({ tenantId: t._id, sectors: { $in: removed } });
+        const matrix = await ScoringMatrixModel.exists({ tenantId: t._id, sector: { $in: removed } });
+        const dataset = await DatasetModel.exists({
+          tenantId: t._id,
+          status: { $in: ['validated', 'approved'] },
+          $or: [
+            { 'content.personas.body.sector': { $in: removed } },
+            { 'content.questions.body.tags.sectors': { $in: removed } },
+            { 'content.rules.body.sectors': { $in: removed } },
+            { 'content.scoring.body.sector': { $in: removed } },
+            { 'content.scoring.sector': { $in: removed } },
+          ],
+        });
+        if (persona || question || rule || matrix || dataset) throw new AppError('CONFLICT', `Cannot remove sectors still referenced by content: ${removed.join(', ')}`);
+      }
+      t.sectors = body.sectors;
+    }
+    if (body.name) t.name = body.name;
+    if (body.plan) t.plan = body.plan;
+    if (body.features) Object.assign(t.features, body.features);
+    if (body.sso) {
+      if (body.sso.domain) {
+        const clash = await TenantModel.findOne({ _id: { $ne: t._id }, 'sso.domain': body.sso.domain.toLowerCase() }).lean();
+        if (clash) throw new AppError('CONFLICT', `domain ${body.sso.domain} is already claimed by another tenant`);
+      }
+      t.set('sso', { providerId: body.sso.providerId ?? undefined, domain: body.sso.domain?.toLowerCase() ?? undefined });
+    }
+    // Keep accepting the legacy field so older clients do not break, but normalize storage to the
+    // tier invariant instead of allowing this compatibility input to weaken or strengthen it.
+    t.set('authPolicy.otpRequired', t.plan === 'paid');
+    if (body.sessionPolicy) for (const [k, v] of Object.entries(body.sessionPolicy)) if (v !== undefined) t.set(`sessionPolicy.${k}`, v);
+    if (body.retentionPolicy) for (const [k, v] of Object.entries(body.retentionPolicy)) if (v !== undefined) t.set(`retentionPolicy.${k}`, v);
+    const wantsSso = (body.features?.sso ?? t.features.sso) === true;
+    if (wantsSso && !(t.sso?.providerId && t.sso?.domain)) throw new AppError('VALIDATION_ERROR', 'enabling SSO needs sso.providerId and sso.domain');
+    await t.save();
+    const updated = view(t);
+    await audit.write({ tenantId: req.user!.tenantId, category: 'config', action: 'tenant.updated', actor: req.user!, entity: { type: 'tenant', id: String(t._id) }, payload: { before, after: updated, changed: Object.keys(body) } });
+    return updated;
+  });
   ok(res, after);
 });

@@ -1,4 +1,5 @@
 import { Types } from 'mongoose';
+import { withMongoTransaction } from '../../lib/db';
 import type { AuthUser } from '../../middleware/auth';
 import { AssessmentModel } from '../assessments/model';
 import { audit } from '../audit/service';
@@ -41,47 +42,65 @@ export const conformanceService = {
     for (const tenant of tenants) {
       const started = Date.now();
       const now = options.now ?? new Date();
+      // Validation is read/CPU work and can be large. Do it before the transaction so the database
+      // transaction contains only one bulk flag write plus the run/audit evidence writes.
       const rawRecords = await AssessmentModel.collection.find({ tenantId: tenant._id }).toArray();
-      let valid = 0;
-      let flagged = 0;
-      let resolved = 0;
-      for (const raw of rawRecords) {
-        const issues = issuesFor(raw as Record<string, unknown>);
-        if (issues.length) {
-          flagged++;
-          await AssessmentConformanceFlagModel.updateOne(
-            { tenantId: tenant._id, assessmentId: raw._id },
-            { $set: { issues, lastDetectedAt: now }, $setOnInsert: { firstDetectedAt: now }, $unset: { resolvedAt: 1 } },
-            { upsert: true },
+      const scanned = rawRecords.map((raw) => ({ raw, issues: issuesFor(raw as Record<string, unknown>) }));
+      const validAssessmentIds = scanned.filter(({ issues }) => issues.length === 0).map(({ raw }) => raw._id);
+      const flagged = scanned.length - validAssessmentIds.length;
+      const valid = validAssessmentIds.length;
+      const result = await withMongoTransaction(async () => {
+        const resolved = validAssessmentIds.length
+          ? await AssessmentConformanceFlagModel.countDocuments({
+              tenantId: tenant._id,
+              assessmentId: { $in: validAssessmentIds },
+              resolvedAt: { $exists: false },
+            })
+          : 0;
+        if (scanned.length) {
+          const operations = scanned.map(({ raw, issues }) => issues.length
+              ? {
+                  updateOne: {
+                    filter: { tenantId: tenant._id, assessmentId: raw._id },
+                    update: { $set: { issues, lastDetectedAt: now, updatedAt: now }, $setOnInsert: { firstDetectedAt: now, createdAt: now }, $unset: { resolvedAt: 1 } },
+                    upsert: true,
+                  },
+                }
+              : {
+                  updateOne: {
+                    filter: { tenantId: tenant._id, assessmentId: raw._id, resolvedAt: { $exists: false } },
+                    update: { $set: { resolvedAt: now, updatedAt: now } },
+                  },
+                });
+          // Mongoose's inferred array-subdocument type expects DocumentArray here, although Mongo
+          // accepts these validated plain issue objects. Keep the Model call (rather than the raw
+          // collection) so transaction AsyncLocalStorage attaches the current session.
+          await AssessmentConformanceFlagModel.bulkWrite(
+            operations as unknown as Parameters<typeof AssessmentConformanceFlagModel.bulkWrite>[0],
+            { ordered: false },
           );
-        } else {
-          valid++;
-          const update = await AssessmentConformanceFlagModel.updateOne(
-            { tenantId: tenant._id, assessmentId: raw._id, resolvedAt: { $exists: false } },
-            { $set: { resolvedAt: now } },
-          );
-          resolved += update.modifiedCount;
         }
-      }
-      const result = {
-        tenantId: String(tenant._id),
-        slug: tenant.slug,
-        ranAt: now,
-        trigger: options.trigger,
-        scanned: rawRecords.length,
-        valid,
-        flagged,
-        resolved,
-        durationMs: Date.now() - started,
-      };
-      await ConformanceRunModel.create({ ...result, tenantId: tenant._id, actorUserId: options.actor?.id ? new Types.ObjectId(options.actor.id) : undefined });
-      await audit.write({
-        tenantId: String(tenant._id),
-        category: 'config',
-        action: 'conformance.scan_completed',
-        actor: options.actor ?? null,
-        entity: { type: 'tenant', id: String(tenant._id) },
-        payload: { scanned: result.scanned, valid, flagged, resolved, trigger: options.trigger },
+        const completed = {
+          tenantId: String(tenant._id),
+          slug: tenant.slug,
+          ranAt: now,
+          trigger: options.trigger,
+          scanned: scanned.length,
+          valid,
+          flagged,
+          resolved,
+          durationMs: Date.now() - started,
+        };
+        await ConformanceRunModel.create({ ...completed, tenantId: tenant._id, actorUserId: options.actor?.id ? new Types.ObjectId(options.actor.id) : undefined });
+        await audit.write({
+          tenantId: String(tenant._id),
+          category: 'config',
+          action: 'conformance.scan_completed',
+          actor: options.actor ?? null,
+          entity: { type: 'tenant', id: String(tenant._id) },
+          payload: { scanned: completed.scanned, valid, flagged, resolved, trigger: options.trigger },
+        });
+        return completed;
       });
       results.push(result);
     }

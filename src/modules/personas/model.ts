@@ -1,6 +1,5 @@
 import { Schema, model, type InferSchemaType } from 'mongoose';
 import { versionedFields } from '../../lib/versioned';
-import { CONTENT_SECTORS } from '../shared/enums';
 
 /**
  * Persona — role-based profile that drives vocabulary, scenarios and questions (BRD §5, FR-09).
@@ -12,7 +11,7 @@ const personaSchema = new Schema(
     tenantId: { type: Schema.Types.ObjectId, ref: 'Tenant', required: true, index: true },
     key: { type: String, required: true, trim: true, lowercase: true },
     name: { type: String, required: true, trim: true },
-    sector: { type: String, enum: CONTENT_SECTORS, required: true },
+    sector: { type: String, required: true },
     description: { type: String, required: true },
     responsibilities: { type: [String], default: [] },
     activities: { type: [String], default: [] },

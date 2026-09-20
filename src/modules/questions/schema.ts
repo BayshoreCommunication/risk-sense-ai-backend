@@ -1,7 +1,8 @@
 import { z } from 'zod';
-import { CONTENT_SECTORS, KEY_REGEX, QUESTION_TYPES } from '../shared/enums';
+import { KEY_REGEX, QUESTION_TYPES, SECTOR_KEY_REGEX } from '../shared/enums';
 
 const FactValue = z.union([z.string(), z.number(), z.boolean()]);
+const SectorKey = z.string().regex(SECTOR_KEY_REGEX, 'lowercase snake_case sector key, 2–64 chars');
 
 export const QuestionBody = z
   .object({
@@ -15,7 +16,7 @@ export const QuestionBody = z
       .object({
         personaKeys: z.array(z.string().regex(KEY_REGEX)).min(1, 'tag at least one persona (FR-15)'),
         scenarioKeys: z.array(z.string().regex(KEY_REGEX)).default([]),
-        sectors: z.array(z.enum(CONTENT_SECTORS)).min(1, 'tag at least one sector (FR-15)'),
+        sectors: z.array(SectorKey).min(1, 'tag at least one sector (FR-15)'),
         category: z.string().max(80).optional(),
       })
       .strict(),
@@ -36,7 +37,7 @@ export const QuestionPatch = QuestionBody.innerType().partial().omit({ key: true
 export const QuestionListQuery = z.object({
   personaKey: z.string().optional(),
   scenarioKey: z.string().optional(),
-  sector: z.enum(CONTENT_SECTORS).optional(),
+  sector: SectorKey.optional(),
   status: z.enum(['active', 'retired']).optional(),
   key: z.string().optional(),
 });

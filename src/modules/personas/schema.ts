@@ -1,10 +1,12 @@
 import { z } from 'zod';
-import { CONTENT_SECTORS, KEY_REGEX, VERSION_STATUSES } from '../shared/enums';
+import { KEY_REGEX, SECTOR_KEY_REGEX, VERSION_STATUSES } from '../shared/enums';
+
+const SectorKey = z.string().regex(SECTOR_KEY_REGEX, 'lowercase snake_case sector key, 2–64 chars');
 
 export const PersonaBody = z.object({
   key: z.string().regex(KEY_REGEX, 'lowercase snake_case, 2–64 chars'),
   name: z.string().min(2).max(120),
-  sector: z.enum(CONTENT_SECTORS),
+  sector: SectorKey,
   description: z.string().min(10).max(2000),
   responsibilities: z.array(z.string().min(1)).default([]),
   activities: z.array(z.string().min(1)).default([]),
@@ -20,7 +22,7 @@ export const PersonaPatch = PersonaBody.partial();
 
 export const PersonaListQuery = z.object({
   status: z.enum(VERSION_STATUSES).optional(),
-  sector: z.enum(CONTENT_SECTORS).optional(),
+  sector: SectorKey.optional(),
   key: z.string().optional(),
   /** `current` (default for non-admins) returns only the active version per key; `all` returns every version. */
   view: z.enum(['current', 'all']).optional(),

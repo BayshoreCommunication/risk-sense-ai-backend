@@ -1,6 +1,6 @@
 # RiskSense AI — project status
 
-As of: 2026-09-15
+As of: 2026-09-20
 Release classification: repository implementation against an unsigned Draft v1 baseline; not externally accepted and not production-ready
 
 ## Authority
@@ -9,25 +9,29 @@ The requirements in docs/requirements are Draft v1 and have not been signed off.
 
 ## Implemented repository capabilities
 
-- Express/TypeScript/Mongoose API with Zod validation, OpenAPI generation, Firebase token verification, application sessions/OTP, tenant-aware RBAC, request limits, structured logging, and health endpoints.
+- Express/TypeScript/Mongoose API with Zod validation, OpenAPI generation, Firebase token verification, application sessions/OTP, tenant-aware RBAC, atomic Mongo-backed request limits shared across API instances, structured logging, and health endpoints.
 - Copy-on-write personas, scenarios, scoring matrices, and rules; audited active/retired questions; and sequenced reviewed dataset bundles with approval/activation workflows.
 - The governed starter template contains 76 deterministic questions, including thirteen curated from the client-supplied 150-question draft; the draft was not used for model training, scoring changes, database seeding, or production activation.
 - Transactional dataset activation and pinned content/rule/prompt versions.
 - JSON assessment turns with persona/scenario selection, deterministic branching, structured fact extraction/clarification, required-fact gates, deterministic rules/scoring, and explanation.
-- Decision invariant, accept/override/escalate, review queues, dashboards, lifecycle reconstruction, append-only application audit/hash verification, masking/audited unmasking, aggregate reports/exports, retention, and persistent conformance.
+- Decision invariant, accept/override/escalate, review queues, dashboards, lifecycle reconstruction, append-only application audit/hash verification, exactly-once service-denial evidence, masking/audited unmasking, aggregate reports/exports, retention, and persistent conformance. Audited domain transitions commit state, derived records/messages, and evidence together.
 - Figma-informed Requestor, administrator/content, system-administrator, and auditor frontend workspaces, including the bounded System Audit archive interface.
-- Generated typed frontend API client, exact 1,165/1,165 English/Bengali message/ICU parity, and 37/37 mocked browser correctness cases.
+- Generated typed frontend API client, exact 1,376/1,376 English/Bengali message/ICU parity, and 56/56 mocked browser correctness cases across four files.
 
 ## Task reconciliation
 
-- T-027 structured content editors and the Figma-informed role-workspace refresh are repository-complete; current lint, typecheck, the 27/27-route Next.js 16 production build and the 37-case mocked Playwright suite are green.
+- T-027 structured content editors and the Figma-informed role-workspace refresh are repository-complete; current lint, typecheck, the 29/29-route Next.js 16 production build and the 56-case mocked Playwright suite are green.
 - T-028 manual user/persona/department mapping exists; real SSO claim-to-tenant/role mapping remains open.
 - T-037 is deferred and superseded by the JSON request/response design.
 - T-038 chat UI/resume exists; SSE/EventSource streaming was removed.
 - T-064 persistent conformance runs and flags are implemented.
-- T-090 English/Bengali repository coverage is repository-complete with exact 1,165/1,165 key and ICU-variable parity and green aggregate frontend validation. Human Bengali/accessibility/usability acceptance remains open.
-- T-100 repository browser coverage is complete at the mocked-API scope (37/37 current cases); production-like full-stack evidence and human UAT remain external gates.
-- NFR-08 remains partial because sector choices are hardcoded.
+- T-090 English/Bengali repository coverage is repository-complete with exact 1,376/1,376 key and ICU-variable parity and green aggregate frontend validation. Human Bengali/accessibility/usability acceptance remains open.
+- T-100 repository browser coverage is complete at the mocked-API scope (56/56 current cases across four files); production-like full-stack evidence and human UAT remain external gates.
+- T-101 frontend and backend dependency audits reported zero vulnerabilities on 2026-09-20. Deployed TLS and independent security acceptance remain external.
+- T-105 replaces fixed sector enums with a tenant-managed vocabulary across personas, questions, rules, scoring matrices, datasets, and system configuration. Transactional tenant guards serialize vocabulary removal against concurrent content writes, including pending validated or approved datasets.
+- T-106 replaces process-local global and route-specific request budgets with atomic Mongo fixed-window counters. Cross-app/store tests prove one shared budget; deployed multi-instance load and security acceptance remain external.
+- T-107 commits audited mutations atomically and records authenticated service-level access denials exactly once.
+- The complete backend suite passes 250/250 tests across 37 files; typecheck, lint, build, OpenAPI generation, and the dependency audit are green. Human and deployed-environment acceptance remain external.
 
 ## AI boundary
 
@@ -35,7 +39,7 @@ The product has four internal structured AI stages: persona inference, scenario 
 
 ## Operations boundary
 
-- The optional scheduler is one in-process daily owner for retention, audit verification, and conformance. There is no Redis/BullMQ/Agenda queue or report-cache job.
+- Vercel Cron invokes the production `CRON_SECRET`-protected nightly route for retention, audit verification, and conformance. The optional in-process timer is a single-owner long-lived-host fallback; there is no Redis/BullMQ/Agenda queue or report-cache job.
 - Assessment retention currently enforces closed-assessment handling. Evidence/dataset-history/per-object enforcement and external audit cold storage remain open.
 - Audit archive export is bounded and manifested, but external immutable custody/retrieval is not configured by the repository.
 - DR status stores operator-attested timestamps/outcome/reference. It does not query Atlas or prove backup/PITR.
@@ -48,7 +52,7 @@ The product has four internal structured AI stages: persona inference, scenario 
 2. TAC-approved production content, mappings, default dataset, rules/matrices, and goldens.
 3. Real Firebase/Admin configuration, authorized domains, email-verification template/delivery, production OTP provider, and verified signup/sign-in UAT.
 4. IdP/SSO claims for tenant/role mapping and lifecycle.
-5. Approved hosting/regions, TLS/domain, secrets, current dependency disposition, and penetration/security acceptance.
+5. Approved hosting/regions, TLS/domain, secret custody, continuing dependency review, and penetration/security acceptance. Repository dependency audits were zero on 2026-09-20 but do not prove deployed security.
 6. Monitoring, alerts, log custody, SLOs, on-call, and representative scale/capacity evidence.
 7. Atlas backup/PITR and isolated restore/failover evidence with accepted RTO/RPO.
 8. External immutable audit archive/cold storage, retrieval, and approved per-object retention/legal hold.
