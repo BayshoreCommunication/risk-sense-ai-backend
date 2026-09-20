@@ -12,7 +12,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import mongoose from 'mongoose';
 import { createApp } from '../src/app';
-import { connectDb } from '../src/lib/db';
+import { connectDb, createMongoReadinessGate } from '../src/lib/db';
 import { logger } from '../src/lib/logger';
 import { ensureRateLimitStoreReady } from '../src/modules/rate-limits/store';
 
@@ -23,20 +23,12 @@ const app = createApp();
 // even though this handler already answered 503. Log it and let the per-request path own the response.
 mongoose.connection.on('error', (err) => logger.error({ err }, 'mongo connection error'));
 
-// One in-flight connection attempt per instance; a failure clears the cache so the next request retries
-// instead of inheriting a rejected promise for the life of the instance.
-let connecting: Promise<unknown> | null = null;
-function ready(): Promise<unknown> {
-  if (!connecting) {
-    connecting = connectDb()
-      .then(() => ensureRateLimitStoreReady())
-      .catch((err) => {
-        connecting = null;
-        throw err;
-      });
-  }
-  return connecting;
-}
+// Coalesce only an active attempt. A resolved promise cannot be cached for the life of a warm
+// instance because Atlas or the platform may close its idle connection between requests.
+const ready = createMongoReadinessGate(async () => {
+  await connectDb();
+  await ensureRateLimitStoreReady();
+});
 
 /**
  * The first request to a cold instance was reliably answering 503 while the next one succeeded: an

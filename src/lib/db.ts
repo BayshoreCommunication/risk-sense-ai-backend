@@ -78,3 +78,42 @@ export function dbStatus(): 'connected' | 'connecting' | 'disconnected' {
   const s = mongoose.connection.readyState;
   return s === 1 ? 'connected' : s === 2 ? 'connecting' : 'disconnected';
 }
+
+/**
+ * Coalesces concurrent serverless connection attempts without caching a completed attempt forever.
+ * A warm function may outlive an idle Mongo connection, so the next request must re-run `prepare`
+ * whenever the live connection predicate becomes false. The fast path also requires a fully
+ * successful preparation, because connecting Mongo must not mask a later index-validation failure.
+ */
+export function createMongoReadinessGate(
+  prepare: () => Promise<unknown>,
+  isConnected: () => boolean = () => mongoose.connection.readyState === 1,
+): () => Promise<void> {
+  let inFlight: Promise<void> | null = null;
+  let prepared = false;
+
+  return async () => {
+    if (prepared && isConnected()) return;
+    if (!isConnected()) prepared = false;
+
+    if (!inFlight) {
+      const attempt = Promise.resolve()
+        .then(prepare)
+        .then(() => {
+          prepared = true;
+        });
+      inFlight = attempt;
+      attempt.then(
+        () => {
+          if (inFlight === attempt) inFlight = null;
+        },
+        () => {
+          prepared = false;
+          if (inFlight === attempt) inFlight = null;
+        },
+      );
+    }
+
+    await inFlight;
+  };
+}
