@@ -1,4 +1,5 @@
 import type { App } from 'firebase-admin/app';
+import type { Auth } from 'firebase-admin/auth';
 import { env } from '../config/env';
 import { AppError } from './errors';
 
@@ -28,6 +29,15 @@ async function getApp(): Promise<App> {
   return app;
 }
 
+/**
+ * Shared Firebase Admin Auth instance for trusted operator paths as well as token verification.
+ * Keeping initialization here ensures scripts use the same credential/project validation as the API.
+ */
+export async function getFirebaseAuth(): Promise<Auth> {
+  const { getAuth } = await import('firebase-admin/auth');
+  return getAuth(await getApp());
+}
+
 export interface VerifiedToken {
   uid: string;
   email?: string;
@@ -39,10 +49,8 @@ export interface VerifiedToken {
 }
 
 export async function verifyIdToken(idToken: string): Promise<VerifiedToken> {
-  const { getAuth } = await import('firebase-admin/auth');
-  const a = await getApp();
   try {
-    const decoded = await getAuth(a).verifyIdToken(idToken, true);
+    const decoded = await (await getFirebaseAuth()).verifyIdToken(idToken, true);
     if (!decoded.email || decoded.email_verified !== true) {
       throw new AppError('UNAUTHENTICATED', 'A verified email address is required');
     }
