@@ -30,7 +30,7 @@ function disableSessionResponseCaching(res: { setHeader(name: string, value: str
 }
 
 /**
- * POST /auth/public-demo/session — exchange a fixed role selector for a short-lived, read-only
+ * POST /auth/public-demo/session — exchange a fixed role selector for a short-lived sandbox
  * application session. No public Firebase credential exists: the server resolves the exact
  * allowlisted Mongo identity inside the operator-pinned synthetic TAC tenant.
  */
@@ -114,7 +114,7 @@ authRouter.post(
         action: 'session.rejected_concurrent',
         actor: authUser,
         entity: { type: 'user', id: authUser.id },
-        payload: { activeSessions: error.activeSessions, accessMode: 'public_demo_read_only' },
+        payload: { activeSessions: error.activeSessions, accessMode: 'public_demo_sandbox' },
       });
       throw new AppError('CONCURRENT_LOGIN_BLOCKED', error.message);
     }
@@ -122,7 +122,7 @@ authRouter.post(
     ok(res, {
       sessionId: session.sessionId,
       expiresAt: session.expiresAt,
-      accessMode: 'public_demo_read_only' as const,
+      accessMode: 'public_demo_sandbox' as const,
       user: authUser,
       tenant: authTenant,
     }, 201);
@@ -137,7 +137,12 @@ authRouter.post(
 authRouter.get('/sso/lookup', validate({ query: SsoLookupQuery }), async (req, res) => {
   const email = (req.query as unknown as z.infer<typeof SsoLookupQuery>).email.toLowerCase();
   const domain = email.split('@')[1]!;
-  const tenant = await TenantModel.findOne({ 'features.sso': true, 'sso.domain': domain }).select('slug name sso').lean();
+  const tenant = await TenantModel.findOne({
+    'features.sso': true,
+    'sso.domain': domain,
+    publicDemo: { $ne: true },
+    ...(env.PUBLIC_DEMO_TENANT_ID ? { _id: { $ne: env.PUBLIC_DEMO_TENANT_ID } } : {}),
+  }).select('slug name sso').lean();
   ok(res, tenant?.sso?.providerId ? { providerId: tenant.sso.providerId, tenant: tenant.name } : { providerId: null, tenant: null });
 });
 

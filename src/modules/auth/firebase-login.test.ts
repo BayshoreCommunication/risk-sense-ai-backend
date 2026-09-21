@@ -17,6 +17,7 @@ import { app, seeded } from '../../tests/helpers';
 import { env } from '../../config/env';
 import { AuditLogModel } from '../audit/model';
 import { audit } from '../audit/service';
+import { PersonaModel } from '../personas/model';
 import { TenantModel } from '../tenants/model';
 import { UserModel } from '../users/model';
 import { SessionModel } from './model';
@@ -151,7 +152,7 @@ describe('Firebase bearer login', () => {
     expect(res.status).toBe(403);
   });
 
-  it('creates server-issued read-only sessions for exactly the four flagged TAC roles without Firebase [FR-01, FR-02, SEC-03]', async () => {
+  it('creates server-issued sandbox sessions for exactly the four flagged TAC roles without Firebase [FR-01, FR-02, SEC-03]', async () => {
     const tenant = (await TenantModel.findOneAndUpdate(
       { slug: 'tac' },
       { $set: { publicDemo: true } },
@@ -170,7 +171,7 @@ describe('Firebase bearer login', () => {
 
       expect(login.status, `${email}: ${JSON.stringify(login.body)}`).toBe(201);
       expect(login.body.data.user.role, email).toBe(role);
-      expect(login.body.data.accessMode, email).toBe('public_demo_read_only');
+      expect(login.body.data.accessMode, email).toBe('public_demo_sandbox');
       expect(login.headers['cache-control']).toBe('no-store');
       expect(login.headers.pragma).toBe('no-cache');
       expect((await SessionModel.findOne({ sessionId: login.body.data.sessionId }).lean())?.loginAssurance).toMatchObject({
@@ -182,52 +183,182 @@ describe('Firebase bearer login', () => {
         .get('/api/v1/me')
         .set('X-Session-Id', login.body.data.sessionId);
       expect(me.status, email).toBe(200);
-      expect(me.body.data.accessMode, email).toBe('public_demo_read_only');
+      expect(me.body.data.accessMode, email).toBe('public_demo_sandbox');
       expect(me.headers['cache-control'], email).toBe('no-store');
       expect(me.headers.pragma, email).toBe('no-cache');
     }
   });
 
-  it('keeps public-demo sessions read-only, blocks unmask, and still permits logout [SEC-01, SEC-03]', async () => {
+  it('uses ordinary RBAC inside the pinned demo tenant while protecting tenant and identity anchors [FR-03, FR-09, SEC-01, SEC-03]', async () => {
     const tenant = (await TenantModel.findOneAndUpdate(
       { slug: 'tac' },
       { $set: { publicDemo: true } },
       { new: true },
     ).select('+publicDemo'))!;
-    await UserModel.updateOne(
-      { email: 'admin@dev.local', tenantId: tenant._id },
-      { $set: { publicDemo: true } },
-    );
-    const login = await request(app).post('/api/v1/auth/public-demo/session').send({ role: 'administrator' });
-    const headers = { 'X-Session-Id': login.body.data.sessionId as string };
-
-    expect((await request(app).get('/api/v1/personas').set(headers)).status).toBe(200);
-
-    const mutation = await request(app).post('/api/v1/personas').set(headers).send({});
-    expect(mutation.status).toBe(403);
-    expect(mutation.body.error.code).toBe('FORBIDDEN');
-    expect(await AuditLogModel.countDocuments({ action: 'access.denied', 'payload.code': 'FORBIDDEN' })).toBe(1);
-
-    const unmask = await request(app).get('/api/v1/audit-logs').query({ unmask: 'true' }).set(headers);
-    expect(unmask.status).toBe(403);
-    expect(unmask.body.error.code).toBe('FORBIDDEN');
-
-    for (const path of [
-      '/api/v1/reports/summary/export?format=csv',
-      '/api/v1/datasets/some-id',
-      '/api/v1/audit-logs/verify',
-      '/api/v1/assessments/some-id/reconstruct',
-      '/api/v1/reports/summary?refresh=true',
-    ]) {
-      const blocked = await request(app).get(path).set(headers);
-      expect(blocked.status, path).toBe(403);
-      expect(blocked.body.error.code, path).toBe('FORBIDDEN');
+    const identities = [
+      ['requestor@tac.local', 'requestor'],
+      ['admin@dev.local', 'administrator'],
+      ['sysadmin@dev.local', 'system_administrator'],
+      ['audit@dev.local', 'audit'],
+    ] as const;
+    for (const [email, role] of identities) {
+      await UserModel.updateOne({ email, role, tenantId: tenant._id }, { $set: { publicDemo: true } });
     }
+    await PersonaModel.create({
+      tenantId: tenant._id,
+      key: 'demo_requestor',
+      name: 'Demo Requestor',
+      sector: 'financial',
+      description: 'Active content used to prove the requestor sandbox workflow can create an assessment.',
+      versionGroupId: tenant._id,
+      version: 1,
+      status: 'active',
+      isCurrent: true,
+    });
 
-    const logout = await request(app).delete('/api/v1/auth/session').set(headers);
+    const sessionFor = async (role: (typeof identities)[number][1]) => {
+      const login = await request(app).post('/api/v1/auth/public-demo/session').send({ role });
+      expect(login.status).toBe(201);
+      return { 'X-Session-Id': login.body.data.sessionId as string };
+    };
+    const [requestor, administrator, systemAdministrator, auditor] = await Promise.all([
+      sessionFor('requestor'),
+      sessionFor('administrator'),
+      sessionFor('system_administrator'),
+      sessionFor('audit'),
+    ]);
+
+    const assessment = await request(app)
+      .post('/api/v1/assessments')
+      .set(requestor)
+      .send({ personaKey: 'demo_requestor' });
+    expect(assessment.status, JSON.stringify(assessment.body)).toBe(201);
+
+    const personaBody = {
+      key: 'demo_configurable_persona',
+      name: 'Demo Configurable Persona',
+      sector: 'financial',
+      description: 'Administrator-created content inside the isolated public demo tenant.',
+    };
+    const requestorDenied = await request(app).post('/api/v1/personas').set(requestor).send(personaBody);
+    expect(requestorDenied.status).toBe(403);
+    expect(requestorDenied.body.error.code).toBe('FORBIDDEN');
+    const persona = await request(app).post('/api/v1/personas').set(administrator).send(personaBody);
+    expect(persona.status, JSON.stringify(persona.body)).toBe(201);
+
+    const unmaskedAudit = await request(app).get('/api/v1/audit-logs').query({ unmask: 'true' }).set(administrator);
+    expect(unmaskedAudit.status).toBe(403);
+    expect(unmaskedAudit.body.error.code).toBe('FORBIDDEN');
+    const verifiedAudit = await request(app).get('/api/v1/audit-logs/verify').set(auditor);
+    expect(verifiedAudit.status).toBe(200);
+
+    const realDomainCreate = await request(app).post('/api/v1/system/users').set(systemAdministrator).send({
+      email: 'sandbox.created@example.com',
+      name: 'Sandbox Created User',
+      role: 'requestor',
+    });
+    expect(realDomainCreate.status).toBe(400);
+    expect(await UserModel.countDocuments({ email: 'sandbox.created@example.com' })).toBe(0);
+
+    const createdUser = await request(app).post('/api/v1/system/users').set(systemAdministrator).send({
+      email: 'sandbox.created@demo.invalid',
+      name: 'Sandbox Created User',
+      role: 'requestor',
+    });
+    expect(createdUser.status, JSON.stringify(createdUser.body)).toBe(201);
+    expect(await UserModel.findById(createdUser.body.data._id).select('+publicDemoSandboxOnly').lean()).toMatchObject({
+      email: 'sandbox.created@demo.invalid',
+      firebaseUid: 'public-demo-sandbox:sandbox.created@demo.invalid',
+      publicDemoSandboxOnly: true,
+    });
+    const bearerReuse = await request(app)
+      .post('/api/v1/auth/session')
+      .set('Authorization', 'Bearer uid:sandbox-firebase:sandbox.created@demo.invalid:mfa:oidc.tac');
+    expect(bearerReuse.status).toBe(403);
+    expect((await UserModel.findById(createdUser.body.data._id).lean())?.firebaseUid)
+      .toBe('public-demo-sandbox:sandbox.created@demo.invalid');
+    const devReuse = await request(app)
+      .post('/api/v1/auth/session')
+      .set('X-Dev-User', 'sandbox.created@demo.invalid');
+    expect(devReuse.status).toBe(403);
+    const reservedJit = await request(app)
+      .post('/api/v1/auth/session')
+      .set('Authorization', 'Bearer uid:reserved-jit:unused@demo.invalid');
+    expect(reservedJit.status).toBe(403);
+    expect(await UserModel.countDocuments({ email: 'unused@demo.invalid' })).toBe(0);
+    expect(await SessionModel.countDocuments({ userId: createdUser.body.data._id })).toBe(0);
+    expect(await AuditLogModel.countDocuments({
+      action: 'auth.identity_linked',
+      'entity.id': createdUser.body.data._id,
+    })).toBe(0);
+
+    const legacySandboxOnly = await UserModel.create({
+      firebaseUid: 'legacy-sandbox-only-uid',
+      email: 'legacy-sandbox-only@example.com',
+      name: 'Legacy Sandbox Only',
+      role: 'requestor',
+      tenantId: tenant._id,
+      publicDemoSandboxOnly: true,
+    });
+    const markerByUid = await request(app)
+      .post('/api/v1/auth/session')
+      .set('Authorization', 'Bearer uid:legacy-sandbox-only-uid:legacy-sandbox-only@example.com:mfa:oidc.tac');
+    expect(markerByUid.status).toBe(403);
+    const markerByEmail = await request(app)
+      .post('/api/v1/auth/session')
+      .set('Authorization', 'Bearer uid:different-uid:legacy-sandbox-only@example.com:mfa:oidc.tac');
+    expect(markerByEmail.status).toBe(403);
+    expect((await UserModel.findById(legacySandboxOnly._id).lean())?.firebaseUid).toBe('legacy-sandbox-only-uid');
+
+    // Sandbox-only directory rows remain manageable but can never become login identities.
+    const changedUser = await request(app)
+      .patch(`/api/v1/system/users/${createdUser.body.data._id}`)
+      .set(systemAdministrator)
+      .send({ role: 'audit' });
+    expect(changedUser.status).toBe(200);
+    expect(changedUser.body.data.role).toBe('audit');
+
+    const adminAnchor = (await UserModel.findOne({ email: 'admin@dev.local', tenantId: tenant._id }).lean())!;
+    const anchorMutation = await request(app)
+      .patch(`/api/v1/system/users/${adminAnchor._id}`)
+      .set(systemAdministrator)
+      .send({ role: 'audit' });
+    expect(anchorMutation.status).toBe(403);
+    expect(anchorMutation.body.error.code).toBe('FORBIDDEN');
+    expect((await UserModel.findById(adminAnchor._id).lean())?.role).toBe('administrator');
+
+    const requestorAnchor = (await UserModel.findOne({ email: 'requestor@tac.local', tenantId: tenant._id }).lean())!;
+    const anchorDisable = await request(app)
+      .patch(`/api/v1/system/users/${requestorAnchor._id}`)
+      .set(systemAdministrator)
+      .send({ status: 'disabled' });
+    expect(anchorDisable.status).toBe(403);
+    expect((await UserModel.findById(requestorAnchor._id).lean())?.status).toBe('active');
+
+    const renamedTenant = await request(app)
+      .patch('/api/v1/system/tenant')
+      .set(systemAdministrator)
+      .send({ name: 'TAC Interactive Demo' });
+    expect(renamedTenant.status).toBe(200);
+    const planMutation = await request(app)
+      .patch('/api/v1/system/tenant')
+      .set(systemAdministrator)
+      .send({ plan: 'free' });
+    expect(planMutation.status).toBe(403);
+    expect((await TenantModel.findById(tenant._id).lean())?.plan).toBe('paid');
+
+    const otherTenantUser = (await UserModel.findOne({ email: 'requestor@paid.local' }).lean())!;
+    const crossTenantMutation = await request(app)
+      .patch(`/api/v1/system/users/${otherTenantUser._id}`)
+      .set(systemAdministrator)
+      .send({ name: 'Cross Tenant Change' });
+    expect(crossTenantMutation.status).toBe(404);
+    expect((await UserModel.findById(otherTenantUser._id).lean())?.name).not.toBe('Cross Tenant Change');
+
+    const logout = await request(app).delete('/api/v1/auth/session').set(administrator);
     expect(logout.status).toBe(200);
     expect(logout.headers['cache-control']).toBe('no-store');
-    expect((await SessionModel.findOne({ sessionId: headers['X-Session-Id'] }).lean())?.terminationReason).toBe('logout');
+    expect((await SessionModel.findOne({ sessionId: administrator['X-Session-Id'] }).lean())?.terminationReason).toBe('logout');
   });
 
   it('revalidates the demo kill switch and persisted flags on every session touch [SEC-02, SEC-03]', async () => {

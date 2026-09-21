@@ -6,7 +6,7 @@ import type { AuthUser } from '../../middleware/auth';
 import { PersonaModel } from '../personas/model';
 import { SessionModel } from '../auth/model';
 import { AuditLogModel } from '../audit/model';
-import { audit } from '../audit/service';
+import { audit, sessionAuditReference } from '../audit/service';
 import { DepartmentModel, TenantModel } from '../tenants/model';
 import { UserModel } from '../users/model';
 import { directoryService } from './directory.service';
@@ -191,6 +191,8 @@ describe('system directory administration [FR-02, FR-10, SEC-01]', () => {
     });
     const userId = created.body.data._id as string;
     const invited = await login('atomic.role@example.com');
+    const invitedSession = (await SessionModel.findOne({ sessionId: invited['X-Session-Id'] }))!;
+    const invitedSessionAuditRef = sessionAuditReference(String(invitedSession._id));
     const writeAudit = audit.write.bind(audit);
     const writeSpy = vi.spyOn(audit, 'write').mockImplementation(async (entry) => {
       if (entry.action === 'session.role_changed') throw new Error('forced role-change termination audit failure');
@@ -202,14 +204,14 @@ describe('system directory administration [FR-02, FR-10, SEC-01]', () => {
     expect(failed.status).toBe(500);
     expect((await UserModel.findById(userId).lean())?.role).toBe('requestor');
     expect((await SessionModel.findOne({ sessionId: invited['X-Session-Id'] }).lean())?.terminatedAt).toBeUndefined();
-    expect(await AuditLogModel.countDocuments({ action: 'session.role_changed', 'entity.id': invited['X-Session-Id'] })).toBe(0);
+    expect(await AuditLogModel.countDocuments({ action: 'session.role_changed', 'entity.id': invitedSessionAuditRef })).toBe(0);
     expect(await AuditLogModel.countDocuments({ action: 'user.updated', 'entity.id': userId })).toBe(0);
 
     const retry = await request(app).patch(`/api/v1/system/users/${userId}`).set(sysadmin).send({ role: 'audit' });
     expect(retry.status).toBe(200);
     expect((await UserModel.findById(userId).lean())?.role).toBe('audit');
     expect((await SessionModel.findOne({ sessionId: invited['X-Session-Id'] }).lean())?.terminationReason).toBe('role_changed');
-    expect(await AuditLogModel.countDocuments({ action: 'session.role_changed', 'entity.id': invited['X-Session-Id'] })).toBe(1);
+    expect(await AuditLogModel.countDocuments({ action: 'session.role_changed', 'entity.id': invitedSessionAuditRef })).toBe(1);
     expect(await AuditLogModel.countDocuments({ action: 'user.updated', 'entity.id': userId })).toBe(1);
   });
 

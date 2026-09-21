@@ -21,6 +21,23 @@ const base = (namespace: string) => ({
 
 /** 20/min per user on chat turns (each free-text turn may call the model). */
 export const messagesLimiter = rateLimit({ ...base('messages'), windowMs: 60_000, limit: 20, message: message('answers') });
+
+/**
+ * One shared public-demo AI budget for the fixed requestor identity, independent of how many
+ * short-lived browser sessions or client IPs are opened. A ten-minute window admits roughly ten
+ * complete guided assessments while bounding model calls and near-term synthetic data growth.
+ */
+export const PUBLIC_DEMO_AI_WINDOW_MS = 10 * 60_000;
+export const PUBLIC_DEMO_AI_LIMIT = 240;
+export const publicDemoAiBudgetKey = (tenantId: string, userId: string) => `${tenantId}:${userId}`;
+export const publicDemoAiLimiter = rateLimit({
+  ...base('public-demo-ai'),
+  windowMs: PUBLIC_DEMO_AI_WINDOW_MS,
+  limit: PUBLIC_DEMO_AI_LIMIT,
+  skip: (req) => skip() || req.accessMode !== 'public_demo_sandbox' || req.user?.role !== 'requestor',
+  keyGenerator: (req) => publicDemoAiBudgetKey(req.tenant!.id, req.user!.id),
+  message: { error: { code: 'RATE_LIMITED', message: 'Public demo activity limit reached; try again in ten minutes' } },
+});
 /** 5/min per user on dataset uploads (parsing + validation is CPU heavy). */
 export const datasetsLimiter = rateLimit({ ...base('datasets'), windowMs: 60_000, limit: 5, message: message('uploads') });
 /** 10/min per IP on session creation (credential stuffing / OTP guessing is also throttled by the OTP service). */

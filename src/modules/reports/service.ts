@@ -3,6 +3,11 @@ import { AppError } from '../../lib/errors';
 import { canonicalJson, sha256 } from '../../lib/hash';
 import type { AuthTenant, AuthUser } from '../../middleware/auth';
 import { AssessmentModel } from '../assessments/model';
+import {
+  publicDemoAssessmentFilter,
+  STANDARD_ASSESSMENT_REQUEST_SCOPE,
+  type AssessmentRequestScope,
+} from '../assessments/public-demo-scope';
 import { CLASSIFICATIONS } from '../shared/enums';
 import { DepartmentModel } from '../tenants/model';
 import { REPORT_CACHE_TTL_SEC, ReportModel } from './model';
@@ -37,9 +42,17 @@ function range(q: ReportQuery) {
 }
 
 /** Tenant + role scope (DASH-04) + optional filters; shared by every report. */
-function baseMatch(user: AuthUser, q: ReportQuery) {
+function baseMatch(
+  user: AuthUser,
+  q: ReportQuery,
+  requestScope: AssessmentRequestScope = STANDARD_ASSESSMENT_REQUEST_SCOPE,
+) {
   const { from, to } = range(q);
-  const m: Record<string, unknown> = { tenantId: new Types.ObjectId(user.tenantId), createdAt: { $gte: from, $lte: to } };
+  const m: Record<string, unknown> = {
+    tenantId: new Types.ObjectId(user.tenantId),
+    createdAt: { $gte: from, $lte: to },
+    ...publicDemoAssessmentFilter(user, requestScope),
+  };
   if (user.role === 'requestor') {
     const me = new Types.ObjectId(user.id);
     if (!user.crossDepartmentAccess) m.$or = user.departmentIds.length ? [{ requestorId: me }, { departmentId: { $in: user.departmentIds.map((d) => new Types.ObjectId(d)) } }] : [{ requestorId: me }];
@@ -71,10 +84,10 @@ const round = (n: unknown) => (typeof n === 'number' ? Math.round(n) : null);
 
 type Computed = Pick<ReportResult, 'columns' | 'rows' | 'summary'>;
 
-async function computeVolume(user: AuthUser, q: ReportQuery): Promise<Computed> {
+async function computeVolume(user: AuthUser, q: ReportQuery, requestScope: AssessmentRequestScope): Promise<Computed> {
   const { from, to } = range(q);
   const grouped = await AssessmentModel.aggregate<{ _id: string; started: number; closed: number; escalated: number; errorReview: number; inProgress: number }>([
-    { $match: baseMatch(user, q) },
+    { $match: baseMatch(user, q, requestScope) },
     { $group: { _id: periodExpr(q.interval), started: { $sum: 1 }, closed: { $sum: { $cond: [{ $eq: ['$status', 'closed'] }, 1, 0] } }, escalated: { $sum: { $cond: [{ $eq: ['$status', 'escalated'] }, 1, 0] } }, errorReview: { $sum: { $cond: [{ $eq: ['$status', 'error_review'] }, 1, 0] } }, inProgress: { $sum: { $cond: [{ $in: ['$status', ['in_progress', 'intake_complete']] }, 1, 0] } } } },
   ]);
   const by = new Map(grouped.map((g) => [g._id, g]));
@@ -90,9 +103,9 @@ async function computeVolume(user: AuthUser, q: ReportQuery): Promise<Computed> 
   };
 }
 
-async function computeClassification(user: AuthUser, q: ReportQuery): Promise<Computed> {
+async function computeClassification(user: AuthUser, q: ReportQuery, requestScope: AssessmentRequestScope): Promise<Computed> {
   const grouped = await AssessmentModel.aggregate<{ _id: string; count: number; ruleDriven: number; professionalConsult: number; overriddenInto: number; avgScore: number; avgConfidence: number }>([
-    { $match: { ...baseMatch(user, q), 'result.computedAt': { $exists: true } } },
+    { $match: { ...baseMatch(user, q, requestScope), 'result.computedAt': { $exists: true } } },
     { $group: { _id: FINAL_CLASS, count: { $sum: 1 }, ruleDriven: { $sum: { $cond: ['$result.ruleDriven', 1, 0] } }, professionalConsult: { $sum: { $cond: ['$result.professionalConsult', 1, 0] } }, overriddenInto: { $sum: { $cond: [{ $in: ['$decision.overriddenTo', CLASSIFICATIONS] }, 1, 0] } }, avgScore: { $avg: '$result.score' }, avgConfidence: { $avg: '$result.confidence' } } },
   ]);
   const by = new Map(grouped.map((g) => [g._id, g]));
@@ -108,10 +121,10 @@ async function computeClassification(user: AuthUser, q: ReportQuery): Promise<Co
   };
 }
 
-async function computeOverrideRate(user: AuthUser, q: ReportQuery): Promise<Computed> {
+async function computeOverrideRate(user: AuthUser, q: ReportQuery, requestScope: AssessmentRequestScope): Promise<Computed> {
   const { from, to } = range(q);
   const grouped = await AssessmentModel.aggregate<{ _id: string; decided: number; accepted: number; overridden: number; escalated: number; up: number; down: number }>([
-    { $match: { ...baseMatch(user, q), 'decision.type': { $exists: true } } },
+    { $match: { ...baseMatch(user, q, requestScope), 'decision.type': { $exists: true } } },
     { $addFields: { _ai: { $indexOfArray: [CLASSIFICATIONS, '$result.classification'] }, _human: { $indexOfArray: [CLASSIFICATIONS, '$decision.overriddenTo'] } } },
     { $group: { _id: periodExpr(q.interval, '$decision.decidedAt'), decided: { $sum: 1 }, accepted: { $sum: { $cond: [{ $eq: ['$decision.type', 'accept'] }, 1, 0] } }, overridden: { $sum: { $cond: [{ $eq: ['$decision.type', 'override'] }, 1, 0] } }, escalated: { $sum: { $cond: [{ $eq: ['$decision.type', 'escalate'] }, 1, 0] } }, up: { $sum: { $cond: [{ $and: [{ $eq: ['$decision.type', 'override'] }, { $gt: ['$_human', '$_ai'] }] }, 1, 0] } }, down: { $sum: { $cond: [{ $and: [{ $eq: ['$decision.type', 'override'] }, { $lt: ['$_human', '$_ai'] }] }, 1, 0] } } } },
   ]);
@@ -125,7 +138,7 @@ async function computeOverrideRate(user: AuthUser, q: ReportQuery): Promise<Comp
   const accepted = sum('accepted');
   const overridden = sum('overridden');
   // FR-23: override reasons are retrievable in reports (latest 50 in range)
-  const reasons = await AssessmentModel.find({ ...baseMatch(user, q), 'decision.type': 'override' }).sort({ 'decision.decidedAt': -1 }).limit(50).select('decision.reason decision.overriddenTo decision.decidedAt result.classification personaKey scenarioKey').lean();
+  const reasons = await AssessmentModel.find({ ...baseMatch(user, q, requestScope), 'decision.type': 'override' }).sort({ 'decision.decidedAt': -1 }).limit(50).select('decision.reason decision.overriddenTo decision.decidedAt result.classification personaKey scenarioKey').lean();
   return {
     columns: [{ key: 'period', label: 'Period', kind: 'text' }, { key: 'decided', label: 'Decided', kind: 'number' }, { key: 'accepted', label: 'Accepted', kind: 'number' }, { key: 'overridden', label: 'Overridden', kind: 'number' }, { key: 'escalated', label: 'Escalated', kind: 'number' }, { key: 'overrideRate', label: 'Override rate', kind: 'percent' }, { key: 'acceptRate', label: 'Accept rate (accuracy proxy)', kind: 'percent' }, { key: 'overriddenUp', label: 'Overridden up', kind: 'number' }, { key: 'overriddenDown', label: 'Overridden down', kind: 'number' }],
     rows,
@@ -136,10 +149,10 @@ async function computeOverrideRate(user: AuthUser, q: ReportQuery): Promise<Comp
   };
 }
 
-async function computeAssessmentTime(user: AuthUser, q: ReportQuery): Promise<Computed> {
+async function computeAssessmentTime(user: AuthUser, q: ReportQuery, requestScope: AssessmentRequestScope): Promise<Computed> {
   const { from, to } = range(q);
   const stages: PipelineStage[] = [
-    { $match: { ...baseMatch(user, q), 'timing.intakeCompletedAt': { $exists: true } } },
+    { $match: { ...baseMatch(user, q, requestScope), 'timing.intakeCompletedAt': { $exists: true } } },
     { $addFields: { intakeSec: { $divide: [{ $subtract: ['$timing.intakeCompletedAt', '$timing.startedAt'] }, 1000] }, decisionSec: { $cond: [{ $and: ['$timing.closedAt', '$timing.submittedAt'] }, { $divide: [{ $subtract: ['$timing.closedAt', '$timing.submittedAt'] }, 1000] }, null] }, totalSec: '$timing.durationSec' } },
     { $group: { _id: periodExpr(q.interval), n: { $sum: 1 }, closed: { $sum: { $cond: ['$timing.closedAt', 1, 0] } }, avgIntake: { $avg: '$intakeSec' }, avgDecision: { $avg: '$decisionSec' }, avgTotal: { $avg: '$totalSec' }, totals: { $push: '$totalSec' } } },
   ];
@@ -160,14 +173,19 @@ async function computeAssessmentTime(user: AuthUser, q: ReportQuery): Promise<Co
   };
 }
 
-const COMPUTE: Record<ReportType, (u: AuthUser, q: ReportQuery) => Promise<Computed>> = {
+const COMPUTE: Record<ReportType, (u: AuthUser, q: ReportQuery, scope: AssessmentRequestScope) => Promise<Computed>> = {
   volume: computeVolume,
   classification: computeClassification,
   'override-rate': computeOverrideRate,
   'assessment-time': computeAssessmentTime,
 };
 
-function scopeKey(user: AuthUser) {
+function scopeKey(user: AuthUser, requestScope: AssessmentRequestScope) {
+  if (requestScope.publicDemoSandbox) {
+    return user.role === 'requestor'
+      ? { role: 'public_demo_requestor', visitor: requestScope.publicDemoSessionTag }
+      : { role: 'public_demo_seeded_history' };
+  }
   return user.role === 'requestor' && !user.crossDepartmentAccess ? { role: 'requestor', user: user.id, departments: [...user.departmentIds].sort() } : { role: 'tenant' };
 }
 
@@ -182,10 +200,19 @@ function publicParams(q: ReportQuery | TrendsQuery) {
 }
 
 /** Cache wrapper: exact (type, params, scope) → 1 h (W9). `refresh=true` recomputes. */
-async function cached(user: AuthUser, tenant: AuthTenant, type: string, q: ReportQuery | TrendsQuery, compute: () => Promise<Computed>): Promise<ReportResult> {
+async function cached(
+  user: AuthUser,
+  tenant: AuthTenant,
+  type: string,
+  q: ReportQuery | TrendsQuery,
+  requestScope: AssessmentRequestScope,
+  compute: () => Promise<Computed>,
+): Promise<ReportResult> {
   if (!tenant.features.reports) throw new AppError('FEATURE_DISABLED', 'reports are a PAID feature');
+  // Validate the sandbox visitor scope before looking up a cached result.
+  publicDemoAssessmentFilter(user, requestScope);
   const params = publicParams(q);
-  const key = sha256(canonicalJson({ type, params, scope: scopeKey(user) }));
+  const key = sha256(canonicalJson({ type, params, scope: scopeKey(user, requestScope) }));
   const { from, to } = range(q);
   if (!q.refresh) {
     const hit = await ReportModel.findOne({ tenantId: user.tenantId, key, generatedAt: { $gte: new Date(Date.now() - REPORT_CACHE_TTL_SEC * 1000) } }).lean();
@@ -200,13 +227,24 @@ async function cached(user: AuthUser, tenant: AuthTenant, type: string, q: Repor
 }
 
 export const reportsService = {
-  async report(user: AuthUser, tenant: AuthTenant, type: ReportType, q: ReportQuery) {
-    return cached(user, tenant, type, q, () => COMPUTE[type](user, q));
+  async report(
+    user: AuthUser,
+    tenant: AuthTenant,
+    type: ReportType,
+    q: ReportQuery,
+    requestScope: AssessmentRequestScope = STANDARD_ASSESSMENT_REQUEST_SCOPE,
+  ) {
+    return cached(user, tenant, type, q, requestScope, () => COMPUTE[type](user, q, requestScope));
   },
 
   /** FR-27 / DASH-03: per-period counts and average score per department | persona | scenario (top 8, rest → "other"). */
-  async trends(user: AuthUser, tenant: AuthTenant, q: TrendsQuery) {
-    return cached(user, tenant, `trends:${q.by}`, q, async () => {
+  async trends(
+    user: AuthUser,
+    tenant: AuthTenant,
+    q: TrendsQuery,
+    requestScope: AssessmentRequestScope = STANDARD_ASSESSMENT_REQUEST_SCOPE,
+  ) {
+    return cached(user, tenant, `trends:${q.by}`, q, requestScope, async () => {
       const { from, to } = range(q);
       // `classification` groups by the final classification, which lets one call fill a stacked
       // per-period chart instead of one request per period.
@@ -216,7 +254,7 @@ export const reportsService = {
         : q.by === 'classification' ? FINAL_CLASS
         : '$scenarioKey';
       const grouped = await AssessmentModel.aggregate<{ _id: { period: string; group: unknown }; count: number; avgScore: number | null; issues: number; elevated: number }>([
-        { $match: baseMatch(user, q) },
+        { $match: baseMatch(user, q, requestScope) },
         { $group: { _id: { period: periodExpr(q.interval), group: dim }, count: { $sum: 1 }, avgScore: { $avg: '$result.score' }, issues: { $sum: { $cond: [{ $eq: [FINAL_CLASS, 'issue'] }, 1, 0] } }, elevated: { $sum: { $cond: [{ $eq: [FINAL_CLASS, 'elevated_risk'] }, 1, 0] } } } },
       ]);
       const names = new Map<string, string>();

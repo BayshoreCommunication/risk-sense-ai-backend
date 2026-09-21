@@ -1,3 +1,4 @@
+import { env } from '../../config/env';
 import { Types } from 'mongoose';
 import { withMongoTransaction } from '../../lib/db';
 import { AppError, notFound } from '../../lib/errors';
@@ -10,6 +11,11 @@ import { UserModel } from '../users/model';
 import { assertRoleAllowedForPlan } from '../users/plan-policy';
 import type { SystemDepartmentCreate, SystemDepartmentPatch, SystemUserCreate, SystemUserPatch } from './schema';
 import { contentTenantId } from '../assessments/content';
+import {
+  isExactPublicDemoIdentity,
+  isPublicDemoSandboxEmail,
+  isPublicDemoTenant,
+} from '../auth/public-demo';
 
 const userView = (user: InstanceType<typeof UserModel>) => ({
   _id: String(user._id),
@@ -84,15 +90,35 @@ export const directoryService = {
     return users.map(userView);
   },
 
-  async createUser(tenantId: string, body: SystemUserCreate, actor: AuthUser) {
+  async createUser(
+    tenantId: string,
+    body: SystemUserCreate,
+    actor: AuthUser,
+    options: { publicDemoSandbox?: boolean } = {},
+  ) {
     return withMongoTransaction(async () => {
+    const sandboxOnly = options.publicDemoSandbox === true;
+    if (sandboxOnly) {
+      if (!isPublicDemoSandboxEmail(body.email)) {
+        throw new AppError('VALIDATION_ERROR', 'Public demo users must use the reserved @demo.invalid email domain');
+      }
+      const tenant = await TenantModel.findById(tenantId).select('slug +publicDemo').lean();
+      if (!tenant || !isPublicDemoTenant({
+        configuredTenantId: env.PUBLIC_DEMO_TENANT_ID,
+        tenant: { id: String(tenant._id), slug: tenant.slug, publicDemo: tenant.publicDemo },
+      })) {
+        throw new AppError('FORBIDDEN', 'Sandbox-only users may be created only in the configured public demo tenant');
+      }
+    } else if (isPublicDemoSandboxEmail(body.email)) {
+      throw new AppError('VALIDATION_ERROR', 'The @demo.invalid email domain is reserved for public demo sandbox users');
+    }
     await validatePlanRole(tenantId, body.role);
     const departmentIds = await validateDepartments(tenantId, body.departmentIds);
     validateRoleScope(body.role, departmentIds, body.crossDepartmentAccess);
     let user;
     try {
       user = await UserModel.create({
-        firebaseUid: `dev:${body.email}`,
+        firebaseUid: sandboxOnly ? `public-demo-sandbox:${body.email}` : `dev:${body.email}`,
         email: body.email,
         name: body.name,
         role: body.role,
@@ -100,6 +126,7 @@ export const directoryService = {
         departmentIds,
         crossDepartmentAccess: body.crossDepartmentAccess,
         mfaEnrolled: false,
+        publicDemoSandboxOnly: sandboxOnly,
       });
     } catch (error) {
       if ((error as { code?: number }).code === 11000) throw new AppError('CONFLICT', 'A user with this email already exists');
@@ -110,10 +137,24 @@ export const directoryService = {
     });
   },
 
-  async updateUser(tenantId: string, id: string, body: SystemUserPatch, actor: AuthUser) {
+  async updateUser(
+    tenantId: string,
+    id: string,
+    body: SystemUserPatch,
+    actor: AuthUser,
+    options: { protectPublicDemoAnchors?: boolean } = {},
+  ) {
     return withMongoTransaction(async () => {
-      const user = await UserModel.findOne({ _id: id, tenantId });
+      const user = await UserModel.findOne({ _id: id, tenantId }).select('+publicDemo');
       if (!user) throw notFound('user');
+      if (
+        options.protectPublicDemoAnchors &&
+        user.publicDemo &&
+        isExactPublicDemoIdentity(user.email, user.role) &&
+        ((body.role !== undefined && body.role !== user.role) || body.status === 'disabled')
+      ) {
+        throw new AppError('FORBIDDEN', 'Public demo anchor identities cannot be disabled or assigned another role');
+      }
       if (actor.id === id && ((body.role && body.role !== user.role) || body.status === 'disabled')) {
         throw new AppError('FORBIDDEN', 'You cannot demote or disable your current account');
       }

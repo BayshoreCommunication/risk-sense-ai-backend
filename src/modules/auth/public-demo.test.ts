@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { isPublicDemoAccount, isPublicDemoEligible, PUBLIC_DEMO_IDENTITIES } from './public-demo';
+import {
+  isPublicDemoAccount,
+  isPublicDemoEligible,
+  isPublicDemoSandboxEmail,
+  isReservedInvalidDomain,
+  PUBLIC_DEMO_IDENTITIES,
+} from './public-demo';
 
 const account = {
   configuredTenantId: '000000000000000000000001',
@@ -31,5 +37,14 @@ describe('public demo allowlist policy [FR-01, FR-02, SEC-03]', () => {
     expect(isPublicDemoEligible({ ...account, enabled: true, trustedPublicDemoFlow: true })).toBe(true);
     expect(isPublicDemoEligible({ ...account, enabled: false, trustedPublicDemoFlow: true })).toBe(false);
     expect(isPublicDemoEligible({ ...account, enabled: true, trustedPublicDemoFlow: false })).toBe(false);
+  });
+
+  it('recognizes only the reserved sandbox email namespace and .invalid SSO domains [SEC-03]', () => {
+    expect(isPublicDemoSandboxEmail('Created.User@DEMO.INVALID')).toBe(true);
+    expect(isPublicDemoSandboxEmail('created.user@sub.demo.invalid')).toBe(false);
+    expect(isPublicDemoSandboxEmail('created.user@demo.invalid.example')).toBe(false);
+    expect(isReservedInvalidDomain('sandbox.invalid')).toBe(true);
+    expect(isReservedInvalidDomain('SSO.SANDBOX.INVALID')).toBe(true);
+    expect(isReservedInvalidDomain('sandbox.invalid.example')).toBe(false);
   });
 });

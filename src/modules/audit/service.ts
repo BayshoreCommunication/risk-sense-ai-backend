@@ -18,6 +18,29 @@ export interface AuditEntryInput {
   payload?: Record<string, unknown>;
 }
 
+const SESSION_REFERENCE_PREFIX = 'session_ref_';
+const SAFE_SESSION_REFERENCE = /^session_ref_[a-f0-9]{64}$/;
+
+/**
+ * Stable, non-secret correlation reference for session audit evidence. Callers should supply the
+ * Session document id; the central write guard also fingerprints any legacy caller input so a
+ * bearer-equivalent sessionId can never be persisted as a session entity id.
+ */
+export function sessionAuditReference(value: string): string {
+  return SAFE_SESSION_REFERENCE.test(value)
+    ? value
+    : `${SESSION_REFERENCE_PREFIX}${sha256(`audit-session:${value}`)}`;
+}
+
+/** Read-time protection for historical rows that may predate non-secret session references. */
+export function redactAuditEntrySecrets<T extends { entity?: { type?: unknown; id?: unknown } | null }>(entry: T): T {
+  if (entry.entity?.type !== 'session' || typeof entry.entity.id !== 'string') return entry;
+  return {
+    ...entry,
+    entity: { ...entry.entity, id: sessionAuditReference(entry.entity.id) },
+  } as T;
+}
+
 /** Fields that participate in the hash, in canonical order (createdAt excluded: set by Mongo after hashing). */
 function hashInput(doc: {
   tenantId: string;
@@ -42,6 +65,9 @@ export const audit = {
     const key = input.tenantId;
     // Payloads may contain Mongoose documents/subdocuments (circular parent refs); store and hash a plain copy.
     const payload = JSON.parse(JSON.stringify(input.payload ?? {})) as Record<string, unknown>;
+    const entity = input.entity.type === 'session'
+      ? { ...input.entity, id: sessionAuditReference(input.entity.id) }
+      : { ...input.entity };
     const run = async () => {
       for (let attempt = 0; attempt < 3; attempt++) {
         const last = await AuditLogModel.findOne({ tenantId: input.tenantId }).sort({ seq: -1 }).select('seq hash').lean();
@@ -54,7 +80,7 @@ export const audit = {
           action: input.action,
           actorUserId: input.actor?.id ?? null,
           actorRole: input.actor?.role ?? null,
-          entity: input.entity,
+          entity,
           payload,
           prevHash,
         };

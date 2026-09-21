@@ -72,6 +72,9 @@ const assessmentSchema = new Schema(
   {
     tenantId: { type: Schema.Types.ObjectId, ref: 'Tenant', required: true, index: true },
     requestorId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    // Opaque hash of the issuing application session for public-demo visitor isolation. Hidden
+    // from ordinary queries and API views; standard/seeded assessments leave it absent.
+    publicDemoSessionTag: { type: String, select: false },
     departmentId: { type: Schema.Types.ObjectId, ref: 'Department' },
     status: { type: String, enum: ASSESSMENT_STATUSES, default: 'in_progress', index: true },
     phase: { type: String, enum: ['persona', 'describe', 'questions', 'done'], default: 'persona' },
@@ -153,6 +156,7 @@ const assessmentSchema = new Schema(
 );
 assessmentSchema.index({ tenantId: 1, status: 1, departmentId: 1, createdAt: -1 }); // DASH-01
 assessmentSchema.index({ tenantId: 1, requestorId: 1, createdAt: -1 });
+assessmentSchema.index({ tenantId: 1, publicDemoSessionTag: 1, createdAt: -1 });
 assessmentSchema.index({ tenantId: 1, personaKey: 1, createdAt: -1 }); // DASH-01 persona filter
 assessmentSchema.index({ tenantId: 1, 'result.classification': 1, createdAt: -1 }); // DASH-01 classification filter
 assessmentSchema.index({ tenantId: 1, escalatedToUserId: 1, status: 1 }); // T-061 "escalated to me"

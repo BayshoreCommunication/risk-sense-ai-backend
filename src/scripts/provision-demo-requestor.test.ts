@@ -145,7 +145,7 @@ describe('shared four-role public demo operator guards [FR-01, FR-02, SEC-03, SE
     });
     expect(await AuditLogModel.findOne({ action: 'user.provisioned' }).lean()).toMatchObject({
       tenantId: tenant._id,
-      payload: { email: identity.email, accessMode: 'public_demo_read_only' },
+      payload: { email: identity.email, accessMode: 'public_demo_sandbox' },
     });
   });
 

@@ -18,6 +18,7 @@
     "seed": "tsx src/scripts/seed.ts",
     "openapi": "tsx src/scripts/openapi.ts",
     "audit:verify": "tsx src/scripts/verify-audit.ts",
+    "sessions:revoke-audit-exposed": "tsx src/scripts/revoke-audit-exposed-sessions.ts",
     "templates": "tsx src/scripts/build-templates.ts",
     "seed:content": "tsx src/scripts/seed-content.ts",
     "seed:demo": "tsx src/scripts/seed-demo.ts",

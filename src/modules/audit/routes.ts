@@ -9,7 +9,7 @@ import { requireSession } from '../../middleware/session';
 import { validate } from '../../middleware/validate';
 import { maskAuditPayload } from '../../lib/sensitive';
 import { AUDIT_CATEGORIES, AuditLogModel } from './model';
-import { audit } from './service';
+import { audit, redactAuditEntrySecrets } from './service';
 import { AuditArchiveManifestModel } from './archive.model';
 import { withMongoTransaction } from '../../lib/db';
 
@@ -44,7 +44,8 @@ auditRouter.get('/', requireRole('administrator', 'system_administrator', 'audit
   if (q.entityId) filter['entity.id'] = q.entityId;
   if (q.from || q.to) filter.createdAt = { ...(q.from ? { $gte: q.from } : {}), ...(q.to ? { $lte: q.to } : {}) };
   if (q.cursorSeq) filter.seq = { $lt: q.cursorSeq };
-  const items = await AuditLogModel.find(filter).sort({ seq: -1 }).limit(q.limit).lean();
+  const storedItems = await AuditLogModel.find(filter).sort({ seq: -1 }).limit(q.limit).lean();
+  const items = storedItems.map(redactAuditEntrySecrets);
   if (q.unmask) {
     await audit.write({
       tenantId: req.user!.tenantId,
@@ -75,6 +76,9 @@ auditRouter.post(
   requireFeature('fullAudit'),
   validate({ body: ArchiveAuditBody }),
   async (req, res) => {
+    if (req.accessMode === 'public_demo_sandbox') {
+      throw new AppError('FORBIDDEN', 'Public demo sessions cannot export raw audit records');
+    }
     const body = req.body as z.infer<typeof ArchiveAuditBody>;
     const range = { $gte: body.from, $lte: body.to };
     const count = await AuditLogModel.countDocuments({ tenantId: req.user!.tenantId, createdAt: range });
@@ -82,7 +86,10 @@ auditRouter.post(
     if (count > body.maxRecords) {
       throw new AppError('VALIDATION_ERROR', `Range contains ${count} records; narrow it or raise maxRecords up to 10000`, { count, maxRecords: body.maxRecords });
     }
-    const records = await AuditLogModel.find({ tenantId: req.user!.tenantId, createdAt: range }).sort({ seq: 1 }).lean();
+    const storedRecords = await AuditLogModel.find({ tenantId: req.user!.tenantId, createdAt: range }).sort({ seq: 1 }).lean();
+    // Historical session events may contain a bearer-equivalent id. Archive output is a sanitized,
+    // consistently hashed view; the database hash-chain remains verified against its stored form.
+    const records = storedRecords.map(redactAuditEntrySecrets);
     const exportHash = sha256(canonicalJson(records));
     const manifest = await withMongoTransaction(async () => {
       const created = await AuditArchiveManifestModel.create({

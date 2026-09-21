@@ -3,10 +3,10 @@ import { Schema, model, type InferSchemaType } from 'mongoose';
 export const TERMINATION_REASONS = ['timeout', 'logout', 'superseded', 'admin', 'role_changed'] as const;
 export const SESSION_AUTHENTICATION_METHODS = ['single_factor', 'firebase_mfa', 'risk_sense_otp', 'development_bypass', 'public_demo'] as const;
 export type SessionAuthenticationMethod = (typeof SESSION_AUTHENTICATION_METHODS)[number];
-export type AccessMode = 'standard' | 'public_demo_read_only';
+export type AccessMode = 'standard' | 'public_demo_sandbox';
 
 export function accessModeForAuthenticationMethod(method: string | undefined): AccessMode {
-  return method === 'public_demo' ? 'public_demo_read_only' : 'standard';
+  return method === 'public_demo' ? 'public_demo_sandbox' : 'standard';
 }
 
 const loginAssuranceSchema = new Schema(

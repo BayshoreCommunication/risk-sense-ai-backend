@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import { ok } from '../../lib/http';
 import { authenticate } from '../../middleware/auth';
 import { reportsLimiter } from '../../middleware/limits';
@@ -7,6 +7,7 @@ import { requireSession } from '../../middleware/session';
 import { validate } from '../../middleware/validate';
 import { isPrivilegedReader, maskText } from '../../lib/sensitive';
 import { audit } from '../audit/service';
+import { assessmentRequestScope } from '../assessments/public-demo-scope';
 import { toCsv, toPdf } from './export';
 import { ExportQuery, ReportParams, ReportQuery, TrendsQuery, type ReportType } from './schema';
 import { reportsService } from './service';
@@ -18,11 +19,12 @@ const READERS = requireRole('requestor', 'administrator', 'system_administrator'
 for (const r of [reportsRouter, analyticsRouter]) r.use(authenticate, requireSession, requireFeature('reports'), READERS, reportsLimiter);
 
 const TITLES: Record<ReportType, string> = { volume: 'Assessment volume', classification: 'Classification distribution', 'override-rate': 'Override rate', 'assessment-time': 'Average assessment time' };
+const scope = (req: Request) => assessmentRequestScope(req.accessMode, req.sessionId);
 
 reportsRouter.get('/:type', validate({ params: ReportParams, query: ReportQuery }), async (req, res) => {
   const type = (req.params as { type: ReportType }).type;
   const q = req.query as unknown as ReportQuery;
-  const report = await reportsService.report(req.user!, req.tenant!, type, q);
+  const report = await reportsService.report(req.user!, req.tenant!, type, q, scope(req));
   // SEC-05: override reasons are free text (FR-23). Privileged readers see them masked unless they unmask (audited).
   if (type === 'override-rate' && typeof report.summary.reasons === 'string' && isPrivilegedReader(req.user!)) {
     if (q.unmask) await audit.write({ tenantId: req.user!.tenantId, category: 'access', action: 'access.unmasked', actor: req.user!, entity: { type: 'report', id: type }, payload: { what: 'override reasons', params: report.params } });
@@ -35,7 +37,7 @@ reportsRouter.get('/:type', validate({ params: ReportParams, query: ReportQuery 
 reportsRouter.get('/:type/export', validate({ params: ReportParams, query: ExportQuery }), async (req, res) => {
   const type = (req.params as { type: ReportType }).type;
   const q = req.query as unknown as ExportQuery;
-  const report = await reportsService.report(req.user!, req.tenant!, type, q);
+  const report = await reportsService.report(req.user!, req.tenant!, type, q, scope(req));
   const stamp = report.range.to.slice(0, 10);
   const name = `risksense-${type}-${stamp}.${q.format}`;
   await audit.write({ tenantId: req.user!.tenantId, category: 'access', action: 'report.exported', actor: req.user!, entity: { type: 'report', id: type }, payload: { format: q.format, params: report.params, rows: report.rows.length } });
@@ -49,5 +51,5 @@ reportsRouter.get('/:type/export', validate({ params: ReportParams, query: Expor
 });
 
 analyticsRouter.get('/trends', validate({ query: TrendsQuery }), async (req, res) => {
-  ok(res, await reportsService.trends(req.user!, req.tenant!, req.query as unknown as TrendsQuery));
+  ok(res, await reportsService.trends(req.user!, req.tenant!, req.query as unknown as TrendsQuery, scope(req)));
 });

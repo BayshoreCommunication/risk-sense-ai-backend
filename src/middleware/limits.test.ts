@@ -7,8 +7,14 @@ import { RateLimitCounterModel } from '../modules/rate-limits/model';
 import { createMongoRateLimitStore } from '../modules/rate-limits/store';
 import { globalRateLimitKey } from '../app';
 import { env } from '../config/env';
+import { PersonaModel } from '../modules/personas/model';
 import { TenantModel } from '../modules/tenants/model';
 import { UserModel } from '../modules/users/model';
+import {
+  PUBLIC_DEMO_AI_LIMIT,
+  PUBLIC_DEMO_AI_WINDOW_MS,
+  publicDemoAiBudgetKey,
+} from './limits';
 
 /** SEC-04 / API.md rate limits — enabled in tests only with RATE_LIMIT_TEST=1 (limits.ts). */
 describe('rate limits and security headers [SEC-04, NFR-03]', () => {
@@ -67,6 +73,68 @@ describe('rate limits and security headers [SEC-04, NFR-03]', () => {
       .send({ role: 'audit' });
     expect(limited.status).toBe(429);
     expect(limited.body.error.code).toBe('RATE_LIMITED');
+  });
+
+  it('shares one bounded AI/start budget across public-demo requestor sessions without limiting standard sessions [SEC-04]', async () => {
+    const { publicTenant } = await seeded();
+    const tenant = (await TenantModel.findOneAndUpdate(
+      { slug: 'tac' },
+      { $set: { publicDemo: true } },
+      { new: true },
+    ).select('+publicDemo'))!;
+    env.PUBLIC_DEMO_TENANT_ID = String(tenant._id);
+    const demoUser = (await UserModel.findOneAndUpdate(
+      { email: 'requestor@tac.local', tenantId: tenant._id },
+      { $set: { publicDemo: true } },
+      { new: true },
+    ).select('+publicDemo'))!;
+
+    for (const [tenantId, key, name] of [
+      [tenant._id, 'demo_quota_persona', 'Demo Quota Persona'],
+      [publicTenant._id, 'standard_quota_persona', 'Standard Quota Persona'],
+    ] as const) {
+      await PersonaModel.create({
+        tenantId,
+        key,
+        name,
+        sector: 'financial',
+        description: 'Active persona used to verify rate-limit scope without invoking the model.',
+        versionGroupId: tenantId,
+        version: 1,
+        status: 'active',
+        isCurrent: true,
+      });
+    }
+
+    const first = await request(app).post('/api/v1/auth/public-demo/session').send({ role: 'requestor' });
+    const second = await request(app).post('/api/v1/auth/public-demo/session').send({ role: 'requestor' });
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+
+    const store = createMongoRateLimitStore('public-demo-ai');
+    store.init({ windowMs: PUBLIC_DEMO_AI_WINDOW_MS } as Options);
+    const budgetKey = publicDemoAiBudgetKey(String(tenant._id), String(demoUser._id));
+    for (let hit = 1; hit < PUBLIC_DEMO_AI_LIMIT; hit++) await store.increment(budgetKey);
+
+    const allowed = await request(app)
+      .post('/api/v1/assessments')
+      .set('X-Session-Id', first.body.data.sessionId as string)
+      .send({ personaKey: 'demo_quota_persona' });
+    expect(allowed.status, JSON.stringify(allowed.body)).toBe(201);
+
+    const limited = await request(app)
+      .post('/api/v1/assessments')
+      .set('X-Session-Id', second.body.data.sessionId as string)
+      .send({ personaKey: 'demo_quota_persona' });
+    expect(limited.status).toBe(429);
+    expect(limited.body.error.code).toBe('RATE_LIMITED');
+
+    const standard = await login('requestor@dev.local');
+    const standardStart = await request(app)
+      .post('/api/v1/assessments')
+      .set(standard)
+      .send({ personaKey: 'standard_quota_persona' });
+    expect(standardStart.status, JSON.stringify(standardStart.body)).toBe(201);
   });
 
   it('throttles report requests per user after 60 per minute, leaving room for one dashboard load', async () => {

@@ -42,7 +42,7 @@ Production signup/sign-in also requires a real Firebase project. The application
 session only after Firebase reports a verified email; authorized domains, verification-email
 template/delivery, and the later application OTP flow must be configured and tested externally.
 
-To provision the four server-issued read-only demo roles, set the reviewed TAC tenant's exact Mongo
+To provision the four server-issued sandbox demo roles, set the reviewed TAC tenant's exact Mongo
 ObjectId in `PUBLIC_DEMO_TENANT_ID` alongside that environment's `MONGODB_URI`,
 `FIREBASE_PROJECT_ID`, and `FIREBASE_SERVICE_ACCOUNT_B64`, then run:
 
@@ -58,6 +58,38 @@ both fixed email and the UID already bound in Mongo, then disabled and revoked b
 Distinct ambiguous identities fail closed. Verify the configured
 Firebase project, Mongo URI, and tenant id before running it; the Mongo deployment must support
 transactions.
+
+Each issued sandbox session uses the selected user's ordinary role, feature gates, ownership rules,
+and tenant-scoped services, so the four roles can exercise their normal product actions inside the
+synthetic tenant. The sandbox credential does not bypass RBAC or tenant scoping. To keep demo access
+recoverable, a sandbox System Administrator cannot disable or change the role of the four fixed
+anchor identities or downgrade the configured demo tenant from PAID. Users created through the
+sandbox must use the non-routable `@demo.invalid` namespace, remain explicitly sandbox-only, and
+cannot be linked to Firebase or a standard session. Demo SSO accepts only reserved `.invalid`
+domains and the demo tenant is excluded from public SSO lookup/JIT and ordinary domain ownership.
+
+Visitor assessments are isolated by an opaque hash of the short-lived public-demo session: a later
+Requestor session cannot list, read, or continue an earlier visitor's assessment, and sandbox
+Administrator/System Administrator/Audit sessions only see untagged seeded assessment history.
+Assessment-backed reports use the same visitor/seeded scope and scope their one-hour cache key;
+CSV/PDF exports contain aggregate table rows, never override-reason free text.
+Sandbox sessions cannot request `unmask=true` or create a raw audit archive. A Mongo-backed shared
+budget allows 240 Requestor AI/start operations per fixed demo tenant/user in each ten-minute
+window, regardless of browser session or IP; ordinary authenticated users are unaffected. These
+narrow identity, privacy, continuity, and abuse controls are the only exceptions to ordinary
+role-permitted sandbox behavior. Automated public-demo data reset/purge remains the open ISS-035
+operational follow-up rather than a property of the session endpoint.
+
+Session audit events store a deterministic non-secret reference derived from the Mongo session
+record, never the bearer-equivalent `X-Session-Id`. Audit list and archive responses also fingerprint
+legacy session entity ids at read time. After deploying this protection, preview and then revoke any
+still-active credentials that appeared in historical audit evidence; the command emits counts only
+and applied terminations are audited:
+
+```bash
+npm run sessions:revoke-audit-exposed
+npm run sessions:revoke-audit-exposed -- --apply
+```
 
 Production still rejects Resend's `onboarding@resend.dev` sender by default. For an explicitly
 approved demo-only deployment, `ALLOW_RESEND_SANDBOX_STARTUP=true` permits non-mail routes to start
@@ -92,10 +124,11 @@ RUN_AI_LIVE=1 AI_PROVIDER=openai OPENAI_API_KEY=... npm run test:ai-live
 | `npm run rules:migrate-versions` | Dry-run the legacy-rule version/index migration; applying requires an exact database name |
 | `npm run retention -- --dry-run` | Preview tenant retention enforcement |
 | `npm run audit:verify` | Verify a tenant audit hash chain |
+| `npm run sessions:revoke-audit-exposed` | Preview historical audit-exposed active sessions; add `-- --apply` to revoke them safely |
 | `npm run load:smoke` | Run the local synthetic load harness |
 | `npm run accuracy` | Calculate the decision accept-rate diagnostic |
 | `npm run user:create -- --email ... --name ... --role ... --tenant ...` | Provision or reconcile one tenant account; managed roles require PAID |
-| `npm run demo:provision-roles` | Reconcile the four fixed TAC read-only demo identities and revoke matching Firebase credentials |
+| `npm run demo:provision-roles` | Reconcile the four fixed TAC sandbox demo identities and revoke matching Firebase credentials |
 
 See `../docs/ai/DeploymentGuide.md` before using any script against a non-development database.
 

@@ -1,5 +1,5 @@
 /**
- * Provision the four exact public read-only demo identities (FR-01, FR-02, SEC-03, SEC-07).
+ * Provision the four exact public sandbox identities (FR-01, FR-02, SEC-03, SEC-07).
  *
  * All identities live in the existing synthetic PAID `tac` tenant. The operator command refuses
  * tenant, role, email, and Firebase UID ownership conflicts. Public demo access never uses a
@@ -238,7 +238,7 @@ export async function reconcileMongoUser(
           tenant: PUBLIC_DEMO_TENANT.slug,
           status: 'active',
           firebaseAuthentication: 'disabled_or_absent',
-          accessMode: 'public_demo_read_only',
+          accessMode: 'public_demo_sandbox',
           via: 'scripts/provision-demo-roles',
         },
       });
@@ -308,7 +308,7 @@ export async function provisionDemoRoles(
       return reconciled;
     });
 
-    return { accessMode: 'public_demo_read_only' as const, identities: results };
+    return { accessMode: 'public_demo_sandbox' as const, identities: results };
   } finally {
     await disconnectDb();
   }
