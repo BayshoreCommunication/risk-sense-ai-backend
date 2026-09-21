@@ -21,11 +21,20 @@ describe('auth & sessions', () => {
   });
 
   it('creates a session and /me returns exactly one role [FR-02]', async () => {
-    const headers = await login('requestor@dev.local');
+    const created = await request(app).post('/api/v1/auth/session').set('X-Dev-User', 'requestor@dev.local');
+    expect(created.headers['cache-control']).toBe('no-store');
+    expect(created.headers.pragma).toBe('no-cache');
+    const headers = {
+      'X-Dev-User': 'requestor@dev.local',
+      'X-Session-Id': created.body.data.sessionId as string,
+    };
     const me = await request(app).get('/api/v1/me').set(headers);
     expect(me.status).toBe(200);
     expect(me.body.data.user.role).toBe('requestor');
     expect(me.body.data.tenant.plan).toBe('free');
+    expect(me.body.data.accessMode).toBe('standard');
+    expect(me.headers['cache-control']).toBe('no-store');
+    expect(me.headers.pragma).toBe('no-cache');
     expect((await SessionModel.findOne({ sessionId: headers['X-Session-Id'] }).lean())?.loginAssurance).toMatchObject({
       method: 'development_bypass',
     });

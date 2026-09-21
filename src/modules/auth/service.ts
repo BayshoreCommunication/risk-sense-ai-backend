@@ -11,9 +11,11 @@ import {
   type SessionAuthenticationMethod,
 } from './model';
 import { allowedSessionAuthenticationMethods } from './policy';
+import { PUBLIC_DEMO_SESSION_ABSOLUTE_MINUTES, PUBLIC_DEMO_SESSION_IDLE_MINUTES } from './public-demo';
 
 interface Meta {
   authenticationMethod: SessionAuthenticationMethod;
+  publicDemoEligible?: boolean;
   userAgent?: string;
   ip?: string;
   signInProvider?: string; // FR-03: which first factor produced this session
@@ -21,6 +23,8 @@ interface Meta {
 
 interface TouchPolicy {
   allowDevelopmentBypass: boolean;
+  allowPublicDemo: boolean;
+  requirePublicDemo: boolean;
 }
 
 const minutes = (n: number) => n * 60 * 1000;
@@ -37,7 +41,12 @@ function assuranceSatisfiesPolicy(
   ) {
     return false;
   }
+  // Once the current verified identity resolves to the exact enabled public-demo allowlist,
+  // no previously issued standard session may retain write access. Requiring the distinct
+  // assurance here protects both touch() and active-session accounting during re-login.
+  if (policy.requirePublicDemo) return policy.allowPublicDemo && assurance.method === 'public_demo';
   if (assurance.method === 'development_bypass') return policy.allowDevelopmentBypass;
+  if (assurance.method === 'public_demo') return false;
   const method = assurance.method as SessionAuthenticationMethod;
   if (!allowedSessionAuthenticationMethods(user, tenant).includes(method)) return false;
   return method === 'single_factor' || Boolean(assurance.mfaVerifiedAt);
@@ -75,6 +84,9 @@ export const sessionService = {
     const assurancePolicy: TouchPolicy = {
       // The only caller that selects this discriminator is the explicit, non-production dev path.
       allowDevelopmentBypass: env.AUTH_DEV_BYPASS && !isProd,
+      // This is derived from a verified bearer plus exact persisted user/tenant flags by auth middleware.
+      allowPublicDemo: meta.authenticationMethod === 'public_demo' && meta.publicDemoEligible === true,
+      requirePublicDemo: meta.authenticationMethod === 'public_demo',
     };
     const proposedAssurance = {
       method: meta.authenticationMethod,
@@ -85,7 +97,12 @@ export const sessionService = {
     }
     return serialized(user.id, () =>
       withMongoTransaction(async () => {
-        const max = tenant.sessionPolicy.maxConcurrentSessions;
+        const publicDemoSession = meta.authenticationMethod === 'public_demo';
+        const max = publicDemoSession ? 10 : tenant.sessionPolicy.maxConcurrentSessions;
+        const blockConcurrentLogin = publicDemoSession ? true : tenant.features.blockConcurrentLogin;
+        const idleTimeoutMin = publicDemoSession
+          ? Math.min(PUBLIC_DEMO_SESSION_IDLE_MINUTES, tenant.sessionPolicy.idleTimeoutMin)
+          : tenant.sessionPolicy.idleTimeoutMin;
         for (let pass = 0; pass < max + 2; pass++) {
           const active = await SessionModel.find({ userId: user.id, terminatedAt: null }).sort({ lastSeenAt: 1 });
           const now = new Date();
@@ -106,7 +123,7 @@ export const sessionService = {
           );
 
           if (live.length >= max) {
-            if (tenant.features.blockConcurrentLogin) throw new ConcurrentSessionBlockedError(live.length);
+            if (blockConcurrentLogin) throw new ConcurrentSessionBlockedError(live.length);
             const excess = live.length - max + 1;
             for (const session of live.slice(0, excess)) await this.terminate(session.sessionId, 'superseded', user);
             continue;
@@ -124,7 +141,10 @@ export const sessionService = {
               tenantId: tenant.id,
               slot,
               lastSeenAt: now,
-              expiresAt: new Date(now.getTime() + minutes(tenant.sessionPolicy.idleTimeoutMin)),
+              expiresAt: new Date(now.getTime() + minutes(idleTimeoutMin)),
+              ...(publicDemoSession
+                ? { absoluteExpiresAt: new Date(now.getTime() + minutes(PUBLIC_DEMO_SESSION_ABSOLUTE_MINUTES)) }
+                : {}),
               loginAssurance: {
                 method: meta.authenticationMethod,
                 ...(['firebase_mfa', 'risk_sense_otp'].includes(meta.authenticationMethod) ? { mfaVerifiedAt: now } : {}),
@@ -159,10 +179,10 @@ export const sessionService = {
 
   /** Validates + extends the session on every request; expired → terminate + 401 SESSION_EXPIRED. */
   async touch(sessionId: string, user: AuthUser, tenant: AuthTenant, policy: TouchPolicy) {
-    const session = await SessionModel.findOne({ sessionId, userId: user.id });
+    const session = await SessionModel.findOne({ sessionId, userId: user.id, tenantId: tenant.id });
     if (!session || session.terminatedAt) throw new AppError('SESSION_INVALID', 'Session is not active');
     const now = new Date();
-    if (session.expiresAt <= now) {
+    if (session.expiresAt <= now || (session.absoluteExpiresAt && session.absoluteExpiresAt <= now)) {
       await this.terminate(sessionId, 'timeout', user);
       throw new AppError('SESSION_EXPIRED', 'Session expired after inactivity');
     }
@@ -172,6 +192,9 @@ export const sessionService = {
     if (!assurance?.method) {
       throw new AppError('SESSION_INVALID', 'Session predates current-login assurance; sign in again');
     }
+    if (assurance.method === 'public_demo' && !session.absoluteExpiresAt) {
+      throw new AppError('SESSION_INVALID', 'Public demo session predates the absolute lifetime policy; sign in again');
+    }
     if (assurance.method === 'development_bypass' && !policy.allowDevelopmentBypass) {
       throw new AppError('SESSION_INVALID', 'Development authentication is not valid for this request');
     }
@@ -179,7 +202,13 @@ export const sessionService = {
       throw new AppError('SESSION_INVALID', 'Session lacks current-login MFA assurance; sign in again');
     }
     session.lastSeenAt = now;
-    session.expiresAt = new Date(now.getTime() + minutes(tenant.sessionPolicy.idleTimeoutMin));
+    const idleTimeoutMin = assurance.method === 'public_demo'
+      ? Math.min(PUBLIC_DEMO_SESSION_IDLE_MINUTES, tenant.sessionPolicy.idleTimeoutMin)
+      : tenant.sessionPolicy.idleTimeoutMin;
+    const slidingExpiry = new Date(now.getTime() + minutes(idleTimeoutMin));
+    session.expiresAt = session.absoluteExpiresAt && session.absoluteExpiresAt < slidingExpiry
+      ? session.absoluteExpiresAt
+      : slidingExpiry;
     await session.save();
     return session;
   },

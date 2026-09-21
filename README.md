@@ -42,25 +42,22 @@ Production signup/sign-in also requires a real Firebase project. The application
 session only after Firebase reports a verified email; authorized domains, verification-email
 template/delivery, and the later application OTP flow must be configured and tested externally.
 
-To provision the same password demo requestor in a configured local or deployed environment, set
-`DEMO_USER_PASSWORD` in the untracked environment alongside that environment's
-`MONGODB_URI`, `FIREBASE_PROJECT_ID`, and `FIREBASE_SERVICE_ACCOUNT_B64`, then run:
+To provision the four server-issued read-only demo roles, set the reviewed TAC tenant's exact Mongo
+ObjectId in `PUBLIC_DEMO_TENANT_ID` alongside that environment's `MONGODB_URI`,
+`FIREBASE_PROJECT_ID`, and `FIREBASE_SERVICE_ACCOUNT_B64`, then run:
 
 ```bash
-npm run demo:provision-requestor
+npm run demo:provision-roles
 ```
 
-The command only creates or updates the enabled, email-verified Firebase password identity
-`requestor@dev.local` and reconciles its Mongo user row to that Firebase UID. It requires the
-existing `public` tenant to be FREE and refuses to move an existing account, change its role, or
-reuse a UID owned by another Mongo user. It never creates a tenant or managed role and never prints
-the password; the password must be at least 8 characters. A changed Mongo row and its append-only
-audit event commit in one transaction. Firebase is necessarily updated before that database
-transaction; if Mongo or audit persistence fails, correct the reported database issue and rerun the
-same command to converge safely. The configured Firebase project and Mongo URI are the mutation
-target, so verify both before running it; the Mongo deployment must support transactions. A
-frontend quick-fill deployment must use the same throwaway value in its public demo-password
-configuration.
+The command refuses any tenant-id, tenant-plan, email, role, or Firebase-UID ownership mismatch.
+It marks only the fixed TAC tenant and four fixed identities, terminates active sessions when an
+identity is promoted, and writes append-only audit evidence in the Mongo transaction. It never
+creates, enables, or resets a public Firebase password. Legacy Firebase identities are resolved by
+both fixed email and the UID already bound in Mongo, then disabled and revoked before reconciliation.
+Distinct ambiguous identities fail closed. Verify the configured
+Firebase project, Mongo URI, and tenant id before running it; the Mongo deployment must support
+transactions.
 
 ## Verification
 
@@ -92,7 +89,7 @@ RUN_AI_LIVE=1 AI_PROVIDER=openai OPENAI_API_KEY=... npm run test:ai-live
 | `npm run load:smoke` | Run the local synthetic load harness |
 | `npm run accuracy` | Calculate the decision accept-rate diagnostic |
 | `npm run user:create -- --email ... --name ... --role ... --tenant ...` | Provision or reconcile one tenant account; managed roles require PAID |
-| `npm run demo:provision-requestor` | Reconcile the fixed `requestor@dev.local` Firebase/Mongo FREE demo identity |
+| `npm run demo:provision-roles` | Reconcile the four fixed TAC read-only demo identities and revoke matching Firebase credentials |
 
 See `../docs/ai/DeploymentGuide.md` before using any script against a non-development database.
 

@@ -3,6 +3,10 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     environment: 'node',
+    env: {
+      PUBLIC_DEMO_ACCESS_ENABLED: 'true',
+      PUBLIC_DEMO_TENANT_ID: '000000000000000000000001',
+    },
     globals: false,
     setupFiles: ['src/tests/setup.ts'],
     include: ['src/**/*.test.ts'],

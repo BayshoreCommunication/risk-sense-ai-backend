@@ -18,6 +18,14 @@ export const envSchema = z
       .string()
       .optional()
       .transform((v) => v === 'true' || v === '1'),
+    // Explicit production-safe gate for server-issued sessions for exact persisted demo identities.
+    // This does not publish a Firebase credential or enable X-Dev-User/email-domain shortcuts.
+    PUBLIC_DEMO_ACCESS_ENABLED: z
+      .string()
+      .optional()
+      .transform((v) => v === 'true' || v === '1'),
+    // Exact immutable Mongo tenant target for the public demo provisioner/runtime allowlist.
+    PUBLIC_DEMO_TENANT_ID: z.string().regex(/^[a-f\d]{24}$/i).optional(),
 
     OPENAI_API_KEY: z.string().optional(),
     OPENAI_MODEL: z.string().default('gpt-4.1-mini'),
@@ -49,6 +57,13 @@ export const envSchema = z
     LOG_LEVEL: z.enum(['silent', 'fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   })
   .superRefine((v, ctx) => {
+    if (v.PUBLIC_DEMO_ACCESS_ENABLED && !v.PUBLIC_DEMO_TENANT_ID) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['PUBLIC_DEMO_TENANT_ID'],
+        message: 'required when PUBLIC_DEMO_ACCESS_ENABLED is true',
+      });
+    }
     if (v.NODE_ENV === 'production') {
       if (v.AUTH_DEV_BYPASS) {
         ctx.addIssue({ code: 'custom', path: ['AUTH_DEV_BYPASS'], message: 'must be false in production' });

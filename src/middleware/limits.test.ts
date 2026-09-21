@@ -6,6 +6,9 @@ import { app, login, seeded } from '../tests/helpers';
 import { RateLimitCounterModel } from '../modules/rate-limits/model';
 import { createMongoRateLimitStore } from '../modules/rate-limits/store';
 import { globalRateLimitKey } from '../app';
+import { env } from '../config/env';
+import { TenantModel } from '../modules/tenants/model';
+import { UserModel } from '../modules/users/model';
 
 /** SEC-04 / API.md rate limits — enabled in tests only with RATE_LIMIT_TEST=1 (limits.ts). */
 describe('rate limits and security headers [SEC-04, NFR-03]', () => {
@@ -41,6 +44,29 @@ describe('rate limits and security headers [SEC-04, NFR-03]', () => {
     expect(res.headers['ratelimit']).toBeDefined(); // draft-7 standard header
     // another client is unaffected
     expect((await request(app).post('/api/v1/auth/session').set('X-Dev-User', 'requestor@dev.local').set('X-Forwarded-For', '203.0.113.8')).status).toBe(201);
+  });
+
+  it('applies the same 10/min/IP throttle to public-demo session creation [SEC-04]', async () => {
+    const tenant = (await TenantModel.findOneAndUpdate(
+      { slug: 'tac' },
+      { $set: { publicDemo: true } },
+      { new: true },
+    ).select('+publicDemo'))!;
+    env.PUBLIC_DEMO_TENANT_ID = String(tenant._id);
+    await UserModel.updateOne({ email: 'audit@dev.local', tenantId: tenant._id }, { $set: { publicDemo: true } });
+
+    for (let i = 0; i < 10; i++) {
+      expect((await request(app)
+        .post('/api/v1/auth/public-demo/session')
+        .set('X-Forwarded-For', '203.0.113.17')
+        .send({ role: 'audit' })).status).toBe(201);
+    }
+    const limited = await request(app)
+      .post('/api/v1/auth/public-demo/session')
+      .set('X-Forwarded-For', '203.0.113.17')
+      .send({ role: 'audit' });
+    expect(limited.status).toBe(429);
+    expect(limited.body.error.code).toBe('RATE_LIMITED');
   });
 
   it('throttles report requests per user after 60 per minute, leaving room for one dashboard load', async () => {

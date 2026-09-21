@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { ROLES } from '../modules/users/model';
 import { TENANT_PLANS } from '../modules/tenants/model';
 import { ArchiveAuditBody, ListAuditQuery } from '../modules/audit/routes';
-import { CreateSessionBody, SsoLookupQuery } from '../modules/auth/routes';
+import { CreatePublicDemoSessionBody, CreateSessionBody, SsoLookupQuery } from '../modules/auth/routes';
 import { ConformanceFlagsQuery, DrStatusPatch, SystemDepartmentCreate, SystemDepartmentPatch, SystemIdParams, SystemUserCreate, SystemUserPatch, TenantPatch } from '../modules/system/schema';
 import { RunBody as RetentionRunBody } from '../modules/retention/routes';
 import { PersonaBody, PersonaListQuery, PersonaPatch } from '../modules/personas/schema';
@@ -60,9 +60,15 @@ const AuthTenant = z
     sessionPolicy: z.object({ idleTimeoutMin: z.number(), maxConcurrentSessions: z.number() }),
   })
   .openapi('AuthTenant');
+const AccessMode = z.enum(['standard', 'public_demo_read_only']).openapi('AccessMode');
 
 const bearer = registry.registerComponent('securitySchemes', 'bearerAuth', { type: 'http', scheme: 'bearer' });
 const sessionHeader = registry.registerComponent('securitySchemes', 'sessionId', { type: 'apiKey', in: 'header', name: 'X-Session-Id' });
+// Standard callers send both credentials; server-issued public-demo callers intentionally send only the app session.
+const secured = [
+  { [bearer.name]: [], [sessionHeader.name]: [] },
+  { [sessionHeader.name]: [] },
+];
 const cronSecret = registry.registerComponent('securitySchemes', 'cronSecret', { type: 'http', scheme: 'bearer', description: 'Vercel Cron shared secret; not a user token' });
 const NightlySummary = z.object({
   ranAt: z.string().datetime(),
@@ -122,6 +128,25 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
+  path: '/auth/public-demo/session',
+  request: { body: { content: { 'application/json': { schema: CreatePublicDemoSessionBody } } } },
+  responses: {
+    201: {
+      description: 'Short-lived read-only public demo session created for one fixed TAC role',
+      content: {
+        'application/json': {
+          schema: Envelope(z.object({ sessionId: z.string(), expiresAt: z.string().datetime(), accessMode: AccessMode, user: AuthUser, tenant: AuthTenant })),
+        },
+      },
+    },
+    403: { description: 'Public demo disabled or provisioned state does not match the fixed allowlist', content: { 'application/json': { schema: ErrorEnvelope } } },
+    409: { description: 'CONCURRENT_LOGIN_BLOCKED', content: { 'application/json': { schema: ErrorEnvelope } } },
+    429: { description: 'RATE_LIMITED', content: { 'application/json': { schema: ErrorEnvelope } } },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
   path: '/auth/session',
   security: [{ [bearer.name]: [] }],
   request: { body: { content: { 'application/json': { schema: CreateSessionBody } } } },
@@ -130,7 +155,7 @@ registry.registerPath({
       description: 'Session created',
       content: {
         'application/json': {
-          schema: Envelope(z.object({ sessionId: z.string(), expiresAt: z.string().datetime(), user: AuthUser, tenant: AuthTenant })),
+          schema: Envelope(z.object({ sessionId: z.string(), expiresAt: z.string().datetime(), accessMode: AccessMode, user: AuthUser, tenant: AuthTenant })),
         },
       },
     },
@@ -142,18 +167,18 @@ registry.registerPath({
 registry.registerPath({
   method: 'delete',
   path: '/auth/session',
-  security: [{ [bearer.name]: [], [sessionHeader.name]: [] }],
+  security: secured,
   responses: { 200: { description: 'Logged out', content: { 'application/json': { schema: Envelope(z.object({ loggedOut: z.boolean() })) } } } },
 });
 
 registry.registerPath({
   method: 'get',
   path: '/me',
-  security: [{ [bearer.name]: [], [sessionHeader.name]: [] }],
+  security: secured,
   responses: {
     200: {
       description: 'Current user',
-      content: { 'application/json': { schema: Envelope(z.object({ user: AuthUser, tenant: AuthTenant, sessionId: z.string() })) } },
+      content: { 'application/json': { schema: Envelope(z.object({ user: AuthUser, tenant: AuthTenant, sessionId: z.string(), accessMode: AccessMode })) } },
     },
   },
 });
@@ -161,7 +186,7 @@ registry.registerPath({
 registry.registerPath({
   method: 'get',
   path: '/audit-logs',
-  security: [{ [bearer.name]: [], [sessionHeader.name]: [] }],
+  security: secured,
   request: { query: ListAuditQuery },
   responses: {
     200: {
@@ -174,7 +199,7 @@ registry.registerPath({
 registry.registerPath({
   method: 'get',
   path: '/audit-logs/verify',
-  security: [{ [bearer.name]: [], [sessionHeader.name]: [] }],
+  security: secured,
   responses: {
     200: {
       description: 'Hash chain verification',
@@ -182,12 +207,11 @@ registry.registerPath({
     },
   },
 });
-registry.registerPath({ method: 'post', path: '/audit-logs/archive', security: [{ [bearer.name]: [], [sessionHeader.name]: [] }], request: { body: { content: { 'application/json': { schema: ArchiveAuditBody } } } }, responses: { 201: { description: 'Bounded clear-text audit export plus immutable manifest/hash (system_administrator, fullAudit)', content: { 'application/json': { schema: Envelope(z.object({ manifest: z.record(z.unknown()), records: z.array(z.record(z.unknown())) })) } } } } });
-registry.registerPath({ method: 'get', path: '/audit-logs/archive-manifests', security: [{ [bearer.name]: [], [sessionHeader.name]: [] }], responses: { 200: { description: 'Immutable audit cold-storage export manifests', content: { 'application/json': { schema: Envelope(z.array(z.record(z.unknown()))) } } } } });
+registry.registerPath({ method: 'post', path: '/audit-logs/archive', security: secured, request: { body: { content: { 'application/json': { schema: ArchiveAuditBody } } } }, responses: { 201: { description: 'Bounded clear-text audit export plus immutable manifest/hash (system_administrator, fullAudit)', content: { 'application/json': { schema: Envelope(z.object({ manifest: z.record(z.unknown()), records: z.array(z.record(z.unknown())) })) } } } } });
+registry.registerPath({ method: 'get', path: '/audit-logs/archive-manifests', security: secured, responses: { 200: { description: 'Immutable audit cold-storage export manifests', content: { 'application/json': { schema: Envelope(z.array(z.record(z.unknown()))) } } } } });
 
 // ---- Content modules (personas, scenarios, questions) — Phase 2
 const Any = z.record(z.unknown());
-const secured = [{ [bearer.name]: [], [sessionHeader.name]: [] }];
 function registerContent(base: string, name: string, body: z.ZodTypeAny, patch: z.ZodTypeAny, query: z.AnyZodObject, extra: { versioned: boolean }) {
   const Item = Any.openapi(name);
   registry.registerPath({ method: 'get', path: base, security: secured, request: { query }, responses: { 200: { description: `List ${name}s`, content: { 'application/json': { schema: Envelope(z.array(Item)) } } } } });

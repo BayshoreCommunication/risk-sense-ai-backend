@@ -23,6 +23,9 @@ const userSchema = new Schema(
     lastMfaAt: { type: Date },
     status: { type: String, enum: ['active', 'disabled'], default: 'active' },
     lastLoginAt: { type: Date },
+    // Internal allowlist bit for the public read-only demo. It is intentionally absent from
+    // directory APIs and must be selected explicitly by authentication/provisioning code.
+    publicDemo: { type: Boolean, default: false, select: false },
   },
   { timestamps: true, collection: 'users' },
 );

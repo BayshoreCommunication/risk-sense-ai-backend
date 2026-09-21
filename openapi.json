@@ -66,6 +66,13 @@
           "meta"
         ]
       },
+      "AccessMode": {
+        "type": "string",
+        "enum": [
+          "standard",
+          "public_demo_read_only"
+        ]
+      },
       "AuthUser": {
         "type": "object",
         "properties": {
@@ -1599,6 +1606,120 @@
         }
       }
     },
+    "/auth/public-demo/session": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "requestor",
+                      "administrator",
+                      "system_administrator",
+                      "audit"
+                    ]
+                  }
+                },
+                "required": [
+                  "role"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Short-lived read-only public demo session created for one fixed TAC role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "sessionId": {
+                          "type": "string"
+                        },
+                        "expiresAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "accessMode": {
+                          "$ref": "#/components/schemas/AccessMode"
+                        },
+                        "user": {
+                          "$ref": "#/components/schemas/AuthUser"
+                        },
+                        "tenant": {
+                          "$ref": "#/components/schemas/AuthTenant"
+                        }
+                      },
+                      "required": [
+                        "sessionId",
+                        "expiresAt",
+                        "accessMode",
+                        "user",
+                        "tenant"
+                      ]
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Public demo disabled or provisioned state does not match the fixed allowlist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONCURRENT_LOGIN_BLOCKED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/auth/session": {
       "post": {
         "security": [
@@ -1640,6 +1761,9 @@
                           "type": "string",
                           "format": "date-time"
                         },
+                        "accessMode": {
+                          "$ref": "#/components/schemas/AccessMode"
+                        },
                         "user": {
                           "$ref": "#/components/schemas/AuthUser"
                         },
@@ -1650,6 +1774,7 @@
                       "required": [
                         "sessionId",
                         "expiresAt",
+                        "accessMode",
                         "user",
                         "tenant"
                       ]
@@ -1701,6 +1826,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "responses": {
@@ -1751,6 +1879,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "responses": {
@@ -1772,12 +1903,16 @@
                         },
                         "sessionId": {
                           "type": "string"
+                        },
+                        "accessMode": {
+                          "$ref": "#/components/schemas/AccessMode"
                         }
                       },
                       "required": [
                         "user",
                         "tenant",
-                        "sessionId"
+                        "sessionId",
+                        "accessMode"
                       ]
                     },
                     "meta": {
@@ -1808,6 +1943,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -1956,6 +2094,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "responses": {
@@ -2012,6 +2153,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -2106,6 +2250,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "responses": {
@@ -2153,6 +2300,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -2240,6 +2390,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -2380,6 +2533,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "parameters": [
@@ -2429,6 +2585,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -2563,6 +2722,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "parameters": [
@@ -2617,6 +2779,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -2680,6 +2845,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "parameters": [
@@ -2731,6 +2899,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -2817,6 +2988,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -3072,6 +3246,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "parameters": [
@@ -3121,6 +3298,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -3365,6 +3545,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "parameters": [
@@ -3419,6 +3602,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -3482,6 +3668,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "parameters": [
@@ -3533,6 +3722,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -3623,6 +3815,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -3827,6 +4022,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "parameters": [
@@ -3876,6 +4074,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -4069,6 +4270,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "parameters": [
@@ -4121,6 +4325,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "responses": {
@@ -4143,6 +4350,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -4186,6 +4396,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -4269,6 +4482,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "parameters": [
@@ -4320,6 +4536,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -4383,6 +4602,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "parameters": [
@@ -4444,6 +4666,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -4512,6 +4737,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -5758,6 +5986,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "parameters": [
@@ -5807,6 +6038,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -7053,6 +7287,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "parameters": [
@@ -7107,6 +7344,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -7190,6 +7430,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "parameters": [
@@ -7252,6 +7495,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "parameters": [
@@ -7303,6 +7549,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -7368,6 +7617,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -14730,6 +14982,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "parameters": [
@@ -14779,6 +15034,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -22141,6 +22399,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "parameters": [
@@ -22195,6 +22456,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -22278,6 +22542,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "parameters": [
@@ -22340,6 +22607,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "parameters": [
@@ -22391,6 +22661,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -22500,6 +22773,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "requestBody": {
@@ -22558,6 +22834,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -22784,6 +23063,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "responses": {
@@ -22828,6 +23110,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -22892,6 +23177,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -22960,6 +23248,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -23045,6 +23336,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "parameters": [
@@ -23115,6 +23409,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "parameters": [
@@ -23176,6 +23473,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -23241,6 +23541,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "parameters": [
@@ -23295,6 +23598,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -23386,6 +23692,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -23528,6 +23837,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "parameters": [
@@ -23667,6 +23979,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -23872,6 +24187,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "responses": {
@@ -23911,6 +24229,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -24080,6 +24401,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "responses": {
@@ -24122,6 +24446,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -24213,6 +24540,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -24311,6 +24641,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "responses": {
@@ -24356,6 +24689,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "responses": {
@@ -24398,6 +24734,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -24469,6 +24808,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -24549,6 +24891,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "responses": {
@@ -24588,6 +24933,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -24690,6 +25038,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "responses": {
@@ -24731,6 +25082,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -24776,6 +25130,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],
@@ -24839,6 +25196,9 @@
           {
             "bearerAuth": [],
             "sessionId": []
+          },
+          {
+            "sessionId": []
           }
         ],
         "requestBody": {
@@ -24898,6 +25258,9 @@
         "security": [
           {
             "bearerAuth": [],
+            "sessionId": []
+          },
+          {
             "sessionId": []
           }
         ],

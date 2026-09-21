@@ -1,8 +1,13 @@
 import { Schema, model, type InferSchemaType } from 'mongoose';
 
 export const TERMINATION_REASONS = ['timeout', 'logout', 'superseded', 'admin', 'role_changed'] as const;
-export const SESSION_AUTHENTICATION_METHODS = ['single_factor', 'firebase_mfa', 'risk_sense_otp', 'development_bypass'] as const;
+export const SESSION_AUTHENTICATION_METHODS = ['single_factor', 'firebase_mfa', 'risk_sense_otp', 'development_bypass', 'public_demo'] as const;
 export type SessionAuthenticationMethod = (typeof SESSION_AUTHENTICATION_METHODS)[number];
+export type AccessMode = 'standard' | 'public_demo_read_only';
+
+export function accessModeForAuthenticationMethod(method: string | undefined): AccessMode {
+  return method === 'public_demo' ? 'public_demo_read_only' : 'standard';
+}
 
 const loginAssuranceSchema = new Schema(
   {
@@ -26,6 +31,8 @@ const sessionSchema = new Schema(
     tenantId: { type: Schema.Types.ObjectId, ref: 'Tenant', required: true },
     lastSeenAt: { type: Date, required: true },
     expiresAt: { type: Date, required: true }, // lastSeenAt + idleTimeout; TTL index cleans up stale docs
+    // Public demo sessions additionally have a non-sliding upper bound. Standard sessions omit it.
+    absoluteExpiresAt: { type: Date },
     terminatedAt: { type: Date },
     terminationReason: { type: String, enum: TERMINATION_REASONS },
     // Required for newly minted sessions. Legacy rows without it are rejected by touch() so they

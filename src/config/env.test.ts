@@ -12,6 +12,18 @@ const production = {
 };
 
 describe('production environment guardrails [FR-01, FR-08, SEC-03, SEC-04]', () => {
+  it('requires an exact immutable tenant id whenever public demo access is enabled [SEC-03]', () => {
+    const missing = envSchema.safeParse({ PUBLIC_DEMO_ACCESS_ENABLED: 'true' });
+    expect(missing.success).toBe(false);
+    const malformed = envSchema.safeParse({ PUBLIC_DEMO_ACCESS_ENABLED: 'true', PUBLIC_DEMO_TENANT_ID: 'tac' });
+    expect(malformed.success).toBe(false);
+    const configured = envSchema.safeParse({
+      PUBLIC_DEMO_ACCESS_ENABLED: 'true',
+      PUBLIC_DEMO_TENANT_ID: 'abcdefabcdefabcdefabcdef',
+    });
+    expect(configured.success).toBe(true);
+  });
+
   it('rejects mock AI and a missing OpenAI credential in production', () => {
     const result = envSchema.safeParse({ ...production, AI_PROVIDER: 'mock' });
     expect(result.success).toBe(false);

@@ -14,14 +14,14 @@ export const usersService = {
     // FR-03: a verified email on a PAID tenant's SSO domain is provisioned into that tenant (just-in-time),
     // otherwise into the shared FREE tenant.
     const domain = input.email.toLowerCase().split('@')[1] ?? '';
-    const ssoTenant = domain ? await TenantModel.findOne({ 'features.sso': true, 'sso.domain': domain }).lean() : null;
+    const ssoTenant = domain ? await TenantModel.findOne({ 'features.sso': true, 'sso.domain': domain }).select('+publicDemo').lean() : null;
     if (ssoTenant?.sso?.providerId && input.signInProvider !== ssoTenant.sso.providerId) {
       throw new AppError('SSO_REQUIRED', 'Use your organization\'s configured SSO provider');
     }
-    const tenant = ssoTenant ?? (await TenantModel.findOne({ slug: PUBLIC_TENANT_SLUG }).lean());
+    const tenant = ssoTenant ?? (await TenantModel.findOne({ slug: PUBLIC_TENANT_SLUG }).select('+publicDemo').lean());
     if (!tenant) throw new AppError('INTERNAL', 'Public tenant is missing — run the seed');
 
-    const existingByEmail = await UserModel.findOne({ email: input.email.toLowerCase() });
+    const existingByEmail = await UserModel.findOne({ email: input.email.toLowerCase() }).select('+publicDemo');
     if (existingByEmail) {
       // A pre-provisioned account is resolved by verified email, but the real uid is not linked yet.
       // Linking happens only after the required OTP/SSO checks succeed in POST /auth/session.

@@ -4,7 +4,7 @@
  * Populates:
  * 1. 5 Real Departments in TAC Solutions mapped to personas.
  * 2. 12+ Realistic Users in TAC Solutions with departments, titles, and roles.
- * 3. Demo Requestor account (requestor@tac.local) provisioned in Firebase Auth & Mongo.
+ * 3. Demo Requestor account (requestor@tac.local) provisioned in Mongo with a non-Firebase placeholder.
  * 4. 8 Detailed Incident Stories with real question/fact keys, transcripts, and scoring drivers.
  * 5. 30+ Live Showcase Assessments across all review states:
  *    - Review queue (awaiting_decision, high score, low confidence / AI-03 mandatory review, professional consult)
@@ -28,16 +28,6 @@ import { RetentionRunModel } from '../modules/retention/model';
 import { DrStatusModel } from '../modules/system/dr.model';
 import { DepartmentModel, TenantModel } from '../modules/tenants/model';
 import { UserModel, type Role } from '../modules/users/model';
-
-/**
- * Password for the seeded demo accounts in Firebase Auth. Read from the environment so the value is not
- * carried in the repository and can be rotated without a release. The script refuses to run without it
- * rather than inventing a default, because a guessable password on accounts that reach production is
- * worse than a seed that stops and says what is missing.
- */
-const DEMO_PASSWORD = process.env.DEMO_USER_PASSWORD ?? '';
-import { initializeApp, cert, getApps } from 'firebase-admin/app';
-import { getAuth } from 'firebase-admin/auth';
 
 const DAY = 86400e3;
 const now = Date.now();
@@ -466,49 +456,15 @@ export async function seedMeaningfulData() {
   const allDeptIds = Object.values(depts);
   console.log(`✓ 5 Departments created/updated for TAC.`);
 
-  // 2. Setup Firebase Admin to provision requestor@tac.local in Firebase Auth
-  console.log('2. Provisioning demo requestor in Firebase Auth...');
-  let firebaseAuth: ReturnType<typeof getAuth> | null = null;
-  try {
-    const sa = JSON.parse(Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_B64 || '', 'base64').toString('utf8'));
-    const app = getApps()[0] ?? initializeApp({ credential: cert(sa), projectId: process.env.FIREBASE_PROJECT_ID });
-    firebaseAuth = getAuth(app);
-  } catch (err) {
-    console.warn('Firebase init warning:', (err as Error).message);
-  }
-
-  let requestorFbUid = 'dev:requestor@tac.local';
-  if (firebaseAuth && !DEMO_PASSWORD) {
-    throw new Error('DEMO_USER_PASSWORD is required to seed the Firebase demo accounts; set it in the environment (see .env.example)');
-  }
-  if (firebaseAuth) {
-    try {
-      const existing = await firebaseAuth.getUserByEmail('requestor@tac.local');
-      requestorFbUid = existing.uid;
-      await firebaseAuth.updateUser(existing.uid, { password: DEMO_PASSWORD, emailVerified: true, displayName: 'David Kim (Demo Requestor)' });
-      console.log(`✓ Updated Firebase user for requestor@tac.local: ${existing.uid}`);
-    } catch (err) {
-      if ((err as { code?: string }).code === 'auth/user-not-found') {
-        const created = await firebaseAuth.createUser({
-          email: 'requestor@tac.local',
-          password: DEMO_PASSWORD,
-          emailVerified: true,
-          displayName: 'David Kim (Demo Requestor)',
-        });
-        requestorFbUid = created.uid;
-        console.log(`✓ Created Firebase user for requestor@tac.local: ${created.uid}`);
-      }
-    }
-  }
-
-  // 3. Realistic Users in TAC
-  console.log('3. Provisioning rich user directory for TAC Solutions...');
+  // 2. Realistic users in TAC. Public demos are server-issued; this seed never creates or
+  // enables a browser credential. The dedicated provisioner performs legacy Firebase revocation.
+  console.log('2. Provisioning rich user directory for TAC Solutions...');
   const usersToCreate = [
     { email: 'admin@dev.local', name: 'Alex Morgan', role: 'administrator' as Role, dept: depts['Information Security & Cyber Defense'], cross: true },
     { email: 'admin2@dev.local', name: 'Sarah Chen', role: 'administrator' as Role, dept: depts['Financial Crime & Treasury Compliance'], cross: true },
     { email: 'sysadmin@dev.local', name: 'Marcus Vance', role: 'system_administrator' as Role, dept: depts['Cloud Infrastructure & DevOps'], cross: true },
     { email: 'audit@dev.local', name: 'Elena Rostova', role: 'audit' as Role, dept: depts['Legal & Regulatory Risk'], cross: true },
-    { email: 'requestor@tac.local', name: 'David Kim', role: 'requestor' as Role, dept: depts['Financial Crime & Treasury Compliance'], cross: false, fbUid: requestorFbUid },
+    { email: 'requestor@tac.local', name: 'David Kim', role: 'requestor' as Role, dept: depts['Financial Crime & Treasury Compliance'], cross: false, fbUid: 'public-demo:requestor' },
     { email: 'secops@tac.local', name: 'Rachel Torres', role: 'requestor' as Role, dept: depts['Information Security & Cyber Defense'], cross: true },
     { email: 'clinical@tac.local', name: 'Dr. James Wilson', role: 'requestor' as Role, dept: depts['Clinical Safety & Healthcare Privacy'], cross: false },
     { email: 'cloud@tac.local', name: 'Priya Patel', role: 'requestor' as Role, dept: depts['Cloud Infrastructure & DevOps'], cross: false },
@@ -565,7 +521,7 @@ export async function seedMeaningfulData() {
   });
 
   // 5. Build Rich Showcase Assessments for TAC
-  console.log('4. Building showcase assessments across all states in TAC...');
+  console.log('3. Building showcase assessments across all states in TAC...');
   const reqId = userDocs['requestor@tac.local']!;
   const secopsId = userDocs['secops@tac.local']!;
   const clinicalId = userDocs['clinical@tac.local']!;
@@ -663,13 +619,13 @@ export async function seedMeaningfulData() {
   console.log(`✓ ${showcaseCount} detailed showcase assessments created with cryptographic audit chain.`);
 
   // 6. Build 12-Month Historical Distribution for TAC Reports & Analytics
-  console.log('5. Generating 12-month analytics history (160+ assessments across all departments)...');
+  console.log('4. Generating 12-month analytics history (160+ assessments across all departments)...');
   const allRequestorIds = [reqId, secopsId, clinicalId, treasuryId, userDocs['regulatory@tac.local']!, userDocs['cloud@tac.local']!];
   const historyCount = await buildHistory(tac._id, allRequestorIds, allDeptIds, 160);
   console.log(`✓ ${historyCount} historical assessments generated for 12-month analytics.`);
 
   // 7. Record System Operational Records (DR, Retention, Conformance)
-  console.log('6. Updating DR, Retention, and Conformance operational state...');
+  console.log('5. Updating DR, Retention, and Conformance operational state...');
   await DrStatusModel.updateOne(
     { tenantId: tac._id },
     {

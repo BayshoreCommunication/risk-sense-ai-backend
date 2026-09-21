@@ -52,6 +52,9 @@ const tenantSchema = new Schema(
       providerId: { type: String },
       domain: { type: String },
     },
+    // Internal marker for an isolated synthetic public-demo tenant. Normal tenant settings cannot
+    // read or mutate it; the guarded demo provisioner is the owner of this bit.
+    publicDemo: { type: Boolean, default: false, select: false },
   },
   { timestamps: true, collection: 'tenants' },
 );

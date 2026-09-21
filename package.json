@@ -29,7 +29,7 @@
     "content:verify": "tsx src/scripts/verify-content.ts",
     "test:ai-live": "tsx src/scripts/ai-live.ts",
     "user:create": "tsx src/scripts/create-user.ts",
-    "demo:provision-requestor": "tsx src/scripts/provision-demo-requestor.ts",
+    "demo:provision-roles": "tsx src/scripts/provision-demo-requestor.ts",
     "seed:showcase": "tsx src/scripts/seed-showcase.ts"
   },
   "dependencies": {

@@ -7,5 +7,7 @@ export const usersRouter = Router();
 
 /** GET /me — current user, role, tenant plan/features (used by the frontend to route by role). */
 usersRouter.get('/me', authenticate, requireSession, (req, res) => {
-  ok(res, { user: req.user, tenant: req.tenant, sessionId: req.sessionId });
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Pragma', 'no-cache');
+  ok(res, { user: req.user, tenant: req.tenant, sessionId: req.sessionId, accessMode: req.accessMode ?? 'standard' });
 });

@@ -7,6 +7,8 @@ import { UserModel, type Role } from '../modules/users/model';
 import { assertRoleAllowedForPlan } from '../modules/users/plan-policy';
 import { usersService } from '../modules/users/service';
 import { allowsNonProductionDemoShortcut } from '../modules/auth/policy';
+import { SessionModel } from '../modules/auth/model';
+import { isPublicDemoAccount, isPublicDemoEligible } from '../modules/auth/public-demo';
 import { TenantModel, type TenantFeatures, type TenantPlan } from '../modules/tenants/model';
 
 export interface AuthUser {
@@ -35,8 +37,9 @@ export interface AuthTenant {
 }
 
 /**
- * Resolves the caller from either
+ * Resolves the caller from one of three explicit credential paths:
  *   - `Authorization: Bearer <Firebase ID token>` (normal path; unknown users self-provision as FREE requestors), or
+ *   - `X-Session-Id` for a server-issued public_demo session (never a Firebase password), or
  *   - `X-Dev-User: <email>` when AUTH_DEV_BYPASS=true and not production (Sprint 0 convenience).
  * Attaches req.user and req.tenant. Session checks live in ./session.ts.
  */
@@ -48,13 +51,14 @@ export const authenticate: RequestHandler = async (req, _res, next) => {
   let tokenMfa = false;
   let signInProvider: string | undefined;
   let verifiedUid: string | undefined;
+  let trustedPublicDemoFlow = false;
 
   if (header?.startsWith('Bearer ')) {
     const token = await verifyIdToken(header.slice('Bearer '.length).trim());
     verifiedUid = token.uid;
     tokenMfa = token.mfa;
     signInProvider = token.signInProvider;
-    user = await UserModel.findOne({ firebaseUid: token.uid }).lean();
+    user = await UserModel.findOne({ firebaseUid: token.uid }).select('+publicDemo').lean();
     if (!user) {
       if (!token.email) throw new AppError('UNAUTHENTICATED', 'Identity has no email');
       const created = await usersService.provisionSelfSignup({
@@ -67,9 +71,19 @@ export const authenticate: RequestHandler = async (req, _res, next) => {
       user = created.toObject();
     }
   } else if (devUser && env.AUTH_DEV_BYPASS && !isProd) {
-    user = await UserModel.findOne({ email: devUser.toLowerCase() }).lean();
+    user = await UserModel.findOne({ email: devUser.toLowerCase() }).select('+publicDemo').lean();
   } else {
-    throw new AppError('UNAUTHENTICATED', 'Missing bearer token');
+    const sessionId = req.header('x-session-id');
+    const publicDemoSession = sessionId
+      ? await SessionModel.findOne({
+          sessionId,
+          terminatedAt: null,
+          'loginAssurance.method': 'public_demo',
+        }).select('userId').lean()
+      : null;
+    if (!publicDemoSession) throw new AppError('UNAUTHENTICATED', 'Missing bearer token');
+    user = await UserModel.findById(publicDemoSession.userId).select('+publicDemo').lean();
+    trustedPublicDemoFlow = true;
   }
 
   if (!user) throw new AppError('UNAUTHENTICATED', 'User is not provisioned');
@@ -77,7 +91,7 @@ export const authenticate: RequestHandler = async (req, _res, next) => {
   // invalid session so every client follows the same secure sign-out path.
   if (user.status !== 'active') throw new AppError('SESSION_INVALID', 'Account is disabled');
 
-  const tenant = await TenantModel.findById(user.tenantId).lean();
+  const tenant = await TenantModel.findById(user.tenantId).select('+publicDemo').lean();
   if (!tenant) throw new AppError('UNAUTHENTICATED', 'Tenant missing');
   // FR-02: fail closed for pre-policy/invalid data as well as new provisioning. Re-running the
   // seed moves known development operators; other legacy rows must be demoted or moved by an operator.
@@ -87,10 +101,30 @@ export const authenticate: RequestHandler = async (req, _res, next) => {
   // Seeded demo accounts may use password only outside production. An email naming convention is
   // never a production SSO exemption (FR-01, SEC-03).
   const isDemoAccount = allowsNonProductionDemoShortcut(user.email);
+  const publicDemoAccountInput = {
+    configuredTenantId: env.PUBLIC_DEMO_TENANT_ID,
+    user: { email: user.email, role: user.role, publicDemo: user.publicDemo },
+    tenant: { id: String(tenant._id), slug: tenant.slug, publicDemo: tenant.publicDemo },
+  };
+  const publicDemoAccount = isPublicDemoAccount(publicDemoAccountInput);
+  const publicDemoEligible = isPublicDemoEligible({
+    ...publicDemoAccountInput,
+    enabled: env.PUBLIC_DEMO_ACCESS_ENABLED,
+    trustedPublicDemoFlow,
+  });
   const paidSsoRole = user.role === 'requestor' || user.role === 'administrator';
   if (header && tenant.plan === 'paid' && paidSsoRole && !isDemoAccount) {
+    const sessionId = req.header('x-session-id');
+    const revalidatingPromotedDemoSession = publicDemoAccount && sessionId
+      ? Boolean(await SessionModel.exists({
+          sessionId,
+          userId: user._id,
+          tenantId: tenant._id,
+          terminatedAt: null,
+        }))
+      : false;
     const providerId = tenant.features.sso ? tenant.sso?.providerId : null;
-    if (!providerId || signInProvider !== providerId) {
+    if (!revalidatingPromotedDemoSession && (!providerId || signInProvider !== providerId)) {
       throw new AppError('SSO_REQUIRED', 'Use your organization\'s configured SSO provider');
     }
   }
@@ -113,6 +147,8 @@ export const authenticate: RequestHandler = async (req, _res, next) => {
   // Keep current-login assurance separate from the historical enrollment flag. A prior MFA
   // enrollment must not make a later single-factor PAID SSO login count as MFA.
   req.identityMfa = tokenMfa;
+  req.publicDemoAccount = publicDemoAccount;
+  req.publicDemoEligible = publicDemoEligible;
   req.tenant = {
     id: String(tenant._id),
     slug: tenant.slug,
