@@ -3,7 +3,7 @@ import { env, isProd } from '../../config/env';
 import { RetryableTransactionCollisionError, isMongoDuplicateKeyFor, withMongoTransaction } from '../../lib/db';
 import { AppError } from '../../lib/errors';
 import type { AuthTenant, AuthUser } from '../../middleware/auth';
-import { audit } from '../audit/service';
+import { audit, sessionAuditReference } from '../audit/service';
 import { UserModel } from '../users/model';
 import {
   SESSION_AUTHENTICATION_METHODS,
@@ -163,7 +163,7 @@ export const sessionService = {
             category: 'session',
             action: 'session.created',
             actor: user,
-            entity: { type: 'session', id: sessionId },
+            entity: { type: 'session', id: sessionAuditReference(String(session._id)) },
             payload: {
               userAgent: meta.userAgent,
               signInProvider: meta.signInProvider ?? null,
@@ -226,7 +226,7 @@ export const sessionService = {
         category: 'session',
         action: `session.${reason}`,
         actor: actor ?? null,
-        entity: { type: 'session', id: sessionId },
+        entity: { type: 'session', id: sessionAuditReference(String(session._id)) },
         payload: { userId: String(session.userId) },
       });
       return session;

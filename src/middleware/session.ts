@@ -1,4 +1,4 @@
-import type { Request, RequestHandler } from 'express';
+import type { RequestHandler } from 'express';
 import { env, isProd } from '../config/env';
 import { AppError } from '../lib/errors';
 import { accessModeForAuthenticationMethod } from '../modules/auth/model';
@@ -7,32 +7,6 @@ import { sessionService } from '../modules/auth/service';
 function requestsTrue(value: unknown): boolean {
   if (Array.isArray(value)) return value.some(requestsTrue);
   return typeof value === 'string' && value.toLowerCase() === 'true';
-}
-
-function isSessionLogout(req: Request): boolean {
-  if (req.method !== 'DELETE') return false;
-  const path = `${req.baseUrl}${req.path}`.replace(/\/+$/, '');
-  return path.endsWith('/auth/session');
-}
-
-function isAllowedPublicDemoRead(req: Request): boolean {
-  const path = `${req.baseUrl}${req.path}`.replace(/\/+$/, '');
-  if (requestsTrue(req.query.unmask) || requestsTrue(req.query.refresh)) return false;
-  return [
-    /^\/api\/v1\/me$/,
-    /^\/api\/v1\/assessments(?:\/[^/]+(?:\/messages|\/escalation-targets)?)?$/,
-    /^\/api\/v1\/departments$/,
-    /^\/api\/v1\/personas(?:\/[^/]+(?:\/history)?)?$/,
-    /^\/api\/v1\/scenarios(?:\/[^/]+(?:\/history)?)?$/,
-    /^\/api\/v1\/questions(?:\/[^/]+)?$/,
-    /^\/api\/v1\/rules(?:\/[^/]+(?:\/history)?)?$/,
-    /^\/api\/v1\/scoring-matrices(?:\/[^/]+(?:\/history)?)?$/,
-    /^\/api\/v1\/datasets$/,
-    /^\/api\/v1\/reports\/[^/]+$/,
-    /^\/api\/v1\/analytics\/trends$/,
-    /^\/api\/v1\/audit-logs(?:\/archive-manifests)?$/,
-    /^\/api\/v1\/system\/(?:users|departments|personas|dr\/status|conformance\/runs|conformance\/flags|tenant|retention\/runs)$/,
-  ].some((pattern) => pattern.test(path));
 }
 
 /**
@@ -56,14 +30,10 @@ export const requireSession: RequestHandler = async (req, _res, next) => {
   });
   req.sessionId = sessionId;
   req.accessMode = accessModeForAuthenticationMethod(session.loginAssurance.method);
-
-  // A public demo account is an intentionally shared viewing identity, not a production operator.
-  // Enforce this after authenticating the exact session so the denial is attributable and audited.
-  if (req.accessMode === 'public_demo_read_only') {
-    const readMethod = req.method === 'GET' || req.method === 'HEAD';
-    if ((!readMethod && !isSessionLogout(req)) || (readMethod && !isAllowedPublicDemoRead(req))) {
-      throw new AppError('FORBIDDEN', 'Public demo access is read-only');
-    }
+  if (req.accessMode === 'public_demo_sandbox' && requestsTrue(req.query.unmask)) {
+    throw new AppError('FORBIDDEN', 'Public demo sessions cannot unmask sensitive data');
   }
+  // Sandbox demo sessions intentionally enter the same route-level RBAC, feature, ownership and
+  // tenant-scope checks as standard sessions. The credential path never grants a role or scope.
   next();
 };

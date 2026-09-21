@@ -111,7 +111,7 @@ describe('multi-tenant isolation [NFR-04, SEC-01]', () => {
     // Lookups that are legitimately tenant-agnostic or scoped by a tenant-owned parent (checked upstream).
     const EXEMPT = [
       /findOne\(\{ firebaseUid/, /findOne\(\{ email/, /findById\(user\.tenantId\)/, /findById\(o\.escalatedToUserId\)/, /findById\(req\.user!\.tenantId\)/, /findById\(scored/, /AssessmentMessageModel\.find\(\{ assessmentId/, /AssessmentMessageModel\.deleteMany\(\{ assessmentId/, /SessionModel\.find/, /SessionModel\.findOne/, /OtpModel/,
-      /TenantModel\.findOne\(\{ slug/, /TenantModel\.findOne\(\{ 'features\.sso'/, /TenantModel\.findOne\(\{ _id: \{ \$ne/, /TenantModel\.find\(opts/, /AssessmentModel\.find\(\{ \.\.\.base/, /AssessmentModel\.updateOne\(\{ _id: doc\._id/, /AssessmentModel\.updateMany\(\{ _id: \{ \$in/, /AssessmentArchiveModel\.updateOne\(\{ assessmentId/,
+      /TenantModel\.findOne\(\{ slug/, /TenantModel\.findOne\(\{\s*'features\.sso'/, /TenantModel\.findOne\(\{ _id: \{ \$ne/, /TenantModel\.findOne\(\{\s*_id: \{ \$nin: excludedTenantIds/, /TenantModel\.find\(opts/, /AssessmentModel\.find\(\{ \.\.\.base/, /AssessmentModel\.updateOne\(\{ _id: doc\._id/, /AssessmentModel\.updateMany\(\{ _id: \{ \$in/, /AssessmentArchiveModel\.updateOne\(\{ assessmentId/,
       /UserModel\.updateOne/, /UserModel\.findById/, /findById\(id\)/, /\.findOne\(\{ _id: id, tenantId/, /AssessmentModel\.findById\(id\)/, /versionGroupId/, /key: q\.key/,
       // filters assembled a few lines earlier from a tenant-scoped base (list(): `scope` → `base` → `filter`; audit routes: `filter.tenantId`)
       /AssessmentModel\.aggregate\(pipeline\)/, /AssessmentModel\.countDocuments\(filter\)/, /\$match: base/, /AuditLogModel\.find\(filter\)/,

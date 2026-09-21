@@ -15,6 +15,11 @@ import { applyBranch, initialQueue, missingRequired, nextQuestion, structuredVal
 import { activePersonas, activePersonasForUser, activeScenarios, contentTenantId, pinVersions, restorePinnedQuestions, restorePinnedRules } from './content';
 import { reconstruct } from './reconstruct';
 import { ASSESSMENT_STATUSES, AssessmentMessageModel, AssessmentModel, type AssessmentStatus } from './model';
+import {
+  publicDemoAssessmentFilter,
+  STANDARD_ASSESSMENT_REQUEST_SCOPE,
+  type AssessmentRequestScope,
+} from './public-demo-scope';
 import { PENDING_STATUSES, type DecisionBody, type ListQuery, type MessageBody, type StartBody } from './schema';
 
 const LOW_CONFIDENCE = 0.7; // FR-06: flag, never drop
@@ -25,6 +30,7 @@ const PLACEHOLDERS = new Set(['unknown', 'n/a', 'na', 'none', 'not stated', 'not
 const isPlaceholder = (v: unknown) => v === null || v === undefined || (typeof v === 'string' && PLACEHOLDERS.has(v.trim().toLowerCase()));
 
 type Doc = InstanceType<typeof AssessmentModel>;
+const STANDARD_REQUEST_SCOPE = STANDARD_ASSESSMENT_REQUEST_SCOPE;
 
 function factsOf(doc: Doc): Facts {
   const out: Facts = {};
@@ -51,9 +57,17 @@ function auditPayload(tenant: AuthTenant, full: Record<string, unknown>, minimal
   return tenant.features.fullAudit ? full : minimal;
 }
 
-async function loadTenantAssessment(user: AuthUser, id: string): Promise<Doc> {
+async function loadTenantAssessment(
+  user: AuthUser,
+  id: string,
+  scope: AssessmentRequestScope = STANDARD_REQUEST_SCOPE,
+): Promise<Doc> {
   if (!Types.ObjectId.isValid(id)) throw notFound('assessment');
-  const doc = await AssessmentModel.findOne({ _id: id, tenantId: user.tenantId });
+  const doc = await AssessmentModel.findOne({
+    _id: id,
+    tenantId: user.tenantId,
+    ...publicDemoAssessmentFilter(user, scope),
+  }).select('+publicDemoSessionTag');
   if (!doc) throw notFound('assessment');
   return doc;
 }
@@ -63,15 +77,24 @@ const isEscalatee = (user: AuthUser, doc: Doc) => Boolean(doc.escalatedToUserId 
 const sharesDepartment = (user: AuthUser, doc: Doc) => Boolean(doc.departmentId && user.departmentIds.includes(String(doc.departmentId)));
 
 /** Intake state is personal: review scope never grants permission to select, answer or submit for its owner. */
-async function loadOwnedForIntake(user: AuthUser, id: string): Promise<Doc> {
-  const doc = await loadTenantAssessment(user, id);
+async function loadOwnedForIntake(
+  user: AuthUser,
+  id: string,
+  scope: AssessmentRequestScope = STANDARD_REQUEST_SCOPE,
+): Promise<Doc> {
+  const doc = await loadTenantAssessment(user, id, scope);
   if (user.role !== 'requestor' || !isOwner(user, doc)) throw new AppError('FORBIDDEN', 'only the assessment owner can change its intake');
   return doc;
 }
 
 /** PAID review visibility is feature-gated; explicit escalation remains visible after scope later changes. */
-async function loadReadableFor(user: AuthUser, tenant: AuthTenant, id: string): Promise<Doc> {
-  const doc = await loadTenantAssessment(user, id);
+async function loadReadableFor(
+  user: AuthUser,
+  tenant: AuthTenant,
+  id: string,
+  scope: AssessmentRequestScope = STANDARD_REQUEST_SCOPE,
+): Promise<Doc> {
+  const doc = await loadTenantAssessment(user, id, scope);
   if (user.role !== 'requestor') return doc;
   const reviewScope = tenant.features.reviewDashboard && (user.crossDepartmentAccess || sharesDepartment(user, doc));
   if (!isOwner(user, doc) && !isEscalatee(user, doc) && !reviewScope) throw new AppError('FORBIDDEN', 'not authorized to review this assessment');
@@ -79,9 +102,14 @@ async function loadReadableFor(user: AuthUser, tenant: AuthTenant, id: string): 
 }
 
 /** Human decisions follow review scope but are intentionally separate from intake mutation authorization. */
-async function loadDecidableFor(user: AuthUser, tenant: AuthTenant, id: string): Promise<Doc> {
+async function loadDecidableFor(
+  user: AuthUser,
+  tenant: AuthTenant,
+  id: string,
+  scope: AssessmentRequestScope = STANDARD_REQUEST_SCOPE,
+): Promise<Doc> {
   if (user.role !== 'requestor') throw new AppError('FORBIDDEN', 'only an authorized requestor can record a decision');
-  return loadReadableFor(user, tenant, id);
+  return loadReadableFor(user, tenant, id, scope);
 }
 
 /**
@@ -199,7 +227,15 @@ type PreparedScenarioSelection = Awaited<ReturnType<typeof prepareScenarioSelect
 
 export const assessmentsService = {
   /** T-031/T-032: create the session; choose or infer the persona (FR-04). */
-  async start(user: AuthUser, tenant: AuthTenant, body: StartBody) {
+  async start(
+    user: AuthUser,
+    tenant: AuthTenant,
+    body: StartBody,
+    scope: AssessmentRequestScope = STANDARD_REQUEST_SCOPE,
+  ) {
+    if (scope.publicDemoSandbox && (user.role !== 'requestor' || !scope.publicDemoSessionTag)) {
+      throw new AppError('SESSION_INVALID', 'Public demo assessment scope is unavailable');
+    }
     const contentTenant = await contentTenantId(user.tenantId);
     const allPersonas = await activePersonas(contentTenant);
     const personas = body.personaKey ? allPersonas : await activePersonasForUser(user, tenant, contentTenant);
@@ -230,6 +266,7 @@ export const assessmentsService = {
       const doc = new AssessmentModel({
         tenantId: user.tenantId,
         requestorId: user.id,
+        ...(scope.publicDemoSessionTag ? { publicDemoSessionTag: scope.publicDemoSessionTag } : {}),
         departmentId: user.departmentIds[0],
         openingText: body.text?.trim(),
         versions: { promptVersion: ai.promptVersion, aiProvider: ai.provider },
@@ -275,8 +312,14 @@ export const assessmentsService = {
   },
 
   /** FR-04: manual choice or override of the AI proposal (only before the questions phase). */
-  async setPersona(user: AuthUser, tenant: AuthTenant, id: string, personaKey: string) {
-    const snapshot = await loadOwnedForIntake(user, id);
+  async setPersona(
+    user: AuthUser,
+    tenant: AuthTenant,
+    id: string,
+    personaKey: string,
+    scope: AssessmentRequestScope = STANDARD_REQUEST_SCOPE,
+  ) {
+    const snapshot = await loadOwnedForIntake(user, id, scope);
     if (snapshot.phase === 'questions' || snapshot.phase === 'done') {
       throw new AppError('CONFLICT', 'the persona cannot change once questions have started');
     }
@@ -288,7 +331,7 @@ export const assessmentsService = {
       : undefined;
 
     return withMongoTransaction(async () => {
-      const doc = await loadOwnedForIntake(user, id);
+      const doc = await loadOwnedForIntake(user, id, scope);
       if (doc.phase === 'questions' || doc.phase === 'done') {
         throw new AppError('CONFLICT', 'the persona cannot change once questions have started');
       }
@@ -346,13 +389,19 @@ export const assessmentsService = {
   },
 
   /** T-035/T-036: one turn of the intake. */
-  async answer(user: AuthUser, tenant: AuthTenant, id: string, body: MessageBody) {
-    const snapshot = await loadOwnedForIntake(user, id);
+  async answer(
+    user: AuthUser,
+    tenant: AuthTenant,
+    id: string,
+    body: MessageBody,
+    scope: AssessmentRequestScope = STANDARD_REQUEST_SCOPE,
+  ) {
+    const snapshot = await loadOwnedForIntake(user, id, scope);
     if (snapshot.status !== 'in_progress') throw new AppError('CONFLICT', `assessment is ${snapshot.status}`);
 
     if (snapshot.phase === 'persona') {
       const key = String(body.value ?? body.text ?? '');
-      return this.setPersona(user, tenant, id, key);
+      return this.setPersona(user, tenant, id, key, scope);
     }
     if (snapshot.phase === 'describe') {
       const text = String(body.text ?? body.value ?? '').trim();
@@ -362,7 +411,7 @@ export const assessmentsService = {
       if (!persona) throw new AppError('CONFLICT', 'the selected persona is no longer active; restart the intake');
       const prepared = await prepareScenarioSelection(contentTenant, persona, text);
       return withMongoTransaction(async () => {
-        const doc = await loadOwnedForIntake(user, id);
+        const doc = await loadOwnedForIntake(user, id, scope);
         if (doc.status !== 'in_progress' || doc.phase !== 'describe' || doc.personaKey !== snapshot.personaKey) {
           throw new AppError('CONFLICT', 'the assessment changed while the scenario was selected; retry the request');
         }
@@ -395,7 +444,7 @@ export const assessmentsService = {
       : undefined;
 
     return withMongoTransaction(async () => {
-      const doc = await loadOwnedForIntake(user, id);
+      const doc = await loadOwnedForIntake(user, id, scope);
       if (doc.status !== 'in_progress') throw new AppError('CONFLICT', `assessment is ${doc.status}`);
       if (doc.phase !== 'questions' || doc.currentQuestionKey !== key) {
         throw new AppError('CONFLICT', 'the pending question changed while the answer was prepared; retry the request');
@@ -481,8 +530,13 @@ export const assessmentsService = {
   },
 
   /** T-054: rules → scoring → explanation. Only after intake is complete (FR-08). */
-  async submit(user: AuthUser, tenant: AuthTenant, id: string) {
-    const snapshot = await loadOwnedForIntake(user, id);
+  async submit(
+    user: AuthUser,
+    tenant: AuthTenant,
+    id: string,
+    scope: AssessmentRequestScope = STANDARD_REQUEST_SCOPE,
+  ) {
+    const snapshot = await loadOwnedForIntake(user, id, scope);
     if (snapshot.status !== 'intake_complete') {
       throw new AppError('MISSING_REQUIRED_FACTS', `assessment is ${snapshot.status}; finish the intake first`);
     }
@@ -515,7 +569,7 @@ export const assessmentsService = {
     const recommendedAction = r.professionalConsult ? 'Further Professional Risk Guidance Needed' : (rule?.forcedAction ?? actions?.decisionRecommendation ?? 'Manage the Risk');
 
     return withMongoTransaction(async () => {
-      const doc = await loadOwnedForIntake(user, id);
+      const doc = await loadOwnedForIntake(user, id, scope);
       if (doc.status !== 'intake_complete') {
         throw new AppError('CONFLICT', `assessment is ${doc.status}; the prepared result is stale`);
       }
@@ -548,9 +602,15 @@ export const assessmentsService = {
   },
 
   /** T-060: the human decision. The only path that can close an assessment (AI-01, FR-22, FR-23). */
-  async decide(user: AuthUser, tenant: AuthTenant, id: string, body: DecisionBody) {
+  async decide(
+    user: AuthUser,
+    tenant: AuthTenant,
+    id: string,
+    body: DecisionBody,
+    scope: AssessmentRequestScope = STANDARD_REQUEST_SCOPE,
+  ) {
     return withMongoTransaction(async () => {
-    const doc = await loadDecidableFor(user, tenant, id);
+    const doc = await loadDecidableFor(user, tenant, id, scope);
     if (!['awaiting_decision', 'escalated', 'error_review'].includes(doc.status)) throw new AppError('CONFLICT', `assessment is ${doc.status}`);
     if (doc.status === 'error_review' && body.type === 'accept') throw new AppError('DECISION_REQUIRED', 'a score of 0 cannot be accepted; override with a classification or escalate (FR-18)');
     doc.decision = { type: body.type, byUserId: new Types.ObjectId(user.id), reason: body.reason?.trim(), overriddenTo: body.overriddenTo, decidedAt: new Date() } as never;
@@ -587,8 +647,14 @@ export const assessmentsService = {
    * T-063 / FR-26: rebuild the lifecycle from the audit log alone, check each entry's hash, and compare the
    * rebuilt state with the stored document (FR-30 conformance). Readers: administrator, system_administrator, audit.
    */
-  async reconstructFromAudit(user: AuthUser, tenant: AuthTenant, id: string, unmask = false) {
-    const doc = await loadReadableFor(user, tenant, id);
+  async reconstructFromAudit(
+    user: AuthUser,
+    tenant: AuthTenant,
+    id: string,
+    unmask = false,
+    scope: AssessmentRequestScope = STANDARD_REQUEST_SCOPE,
+  ) {
+    const doc = await loadReadableFor(user, tenant, id, scope);
     const clear = await unmaskGate(user, doc, unmask, 'reconstruction');
     // Lifecycle categories only: access events (e.g. this very unmask) are not part of what happened to the assessment.
     const entries = await audit.forEntity(user.tenantId, 'assessment', id, ['assessment', 'decision', 'retention']);
@@ -636,19 +702,36 @@ export const assessmentsService = {
   },
 
   /** T-061: reviewers the caller may escalate this assessment to (empty on FREE tenants). */
-  async escalationTargets(user: AuthUser, tenant: AuthTenant, id: string) {
-    const doc = await loadDecidableFor(user, tenant, id);
+  async escalationTargets(
+    user: AuthUser,
+    tenant: AuthTenant,
+    id: string,
+    scope: AssessmentRequestScope = STANDARD_REQUEST_SCOPE,
+  ) {
+    const doc = await loadDecidableFor(user, tenant, id, scope);
     return escalationCandidates(user, tenant, doc);
   },
 
-  async get(user: AuthUser, tenant: AuthTenant, id: string, unmask = false) {
-    const doc = await loadReadableFor(user, tenant, id);
+  async get(
+    user: AuthUser,
+    tenant: AuthTenant,
+    id: string,
+    unmask = false,
+    scope: AssessmentRequestScope = STANDARD_REQUEST_SCOPE,
+  ) {
+    const doc = await loadReadableFor(user, tenant, id, scope);
     const v = await this.view(doc);
     return (await unmaskGate(user, doc, unmask, 'assessment')) ? { ...v, masked: null } : maskAssessmentView(v, doc.sector);
   },
 
-  async messages(user: AuthUser, tenant: AuthTenant, id: string, unmask = false) {
-    const doc = await loadReadableFor(user, tenant, id);
+  async messages(
+    user: AuthUser,
+    tenant: AuthTenant,
+    id: string,
+    unmask = false,
+    scope: AssessmentRequestScope = STANDARD_REQUEST_SCOPE,
+  ) {
+    const doc = await loadReadableFor(user, tenant, id, scope);
     const msgs = await AssessmentMessageModel.find({ assessmentId: doc._id }).sort({ createdAt: 1, _id: 1 }).lean();
     return (await unmaskGate(user, doc, unmask, 'messages')) ? msgs : maskMessages(msgs, doc.sector);
   },
@@ -660,8 +743,16 @@ export const assessmentsService = {
    * classification, persona, scenario, department, date range. `pending_first` sorting is done in the
    * database so it survives pagination. `counts` (per status, within the non-status filters) feed the tabs.
    */
-  async list(user: AuthUser, tenant: AuthTenant, q: ListQuery) {
-    const scope: Record<string, unknown> = { tenantId: new Types.ObjectId(user.tenantId) };
+  async list(
+    user: AuthUser,
+    tenant: AuthTenant,
+    q: ListQuery,
+    requestScope: AssessmentRequestScope = STANDARD_REQUEST_SCOPE,
+  ) {
+    const scope: Record<string, unknown> = {
+      tenantId: new Types.ObjectId(user.tenantId),
+      ...publicDemoAssessmentFilter(user, requestScope),
+    };
     if (user.role === 'requestor') {
       const me = new Types.ObjectId(user.id);
       const mine: Record<string, unknown>[] = [{ requestorId: me }, { escalatedToUserId: me }]; // own + routed to me (T-061)

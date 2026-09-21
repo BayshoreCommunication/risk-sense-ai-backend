@@ -14,6 +14,7 @@ vi.mock('../../lib/firebase', () => ({
 }));
 
 import { app, login, seeded } from '../../tests/helpers';
+import { env } from '../../config/env';
 import { AuditLogModel } from '../audit/model';
 import { PersonaModel } from '../personas/model';
 import { TenantModel } from '../tenants/model';
@@ -23,6 +24,7 @@ import { SessionModel } from './model';
 describe('SSO via Firebase OIDC/OAuth providers [FR-03, SEC-03]', () => {
   beforeEach(async () => {
     await seeded();
+    env.PUBLIC_DEMO_TENANT_ID = '000000000000000000000001';
     await TenantModel.updateOne({ slug: 'acme' }, { $set: { 'features.sso': true, sso: { providerId: 'oidc.acme', domain: 'acme.com' } } });
   });
 
@@ -135,6 +137,84 @@ describe('SSO via Firebase OIDC/OAuth providers [FR-03, SEC-03]', () => {
     expect(res.status).toBe(401);
     expect(res.body.error.code).toBe('SSO_REQUIRED');
     expect(await UserModel.countDocuments({ email: 'intruder@acme.com' })).toBe(0);
+  });
+
+  it('excludes the public demo tenant from SSO lookup, JIT, and ordinary domain ownership [FR-03, SEC-01, SEC-03]', async () => {
+    const tac = (await TenantModel.findOneAndUpdate(
+      { slug: 'tac' },
+      {
+        $set: {
+          publicDemo: true,
+          'features.sso': true,
+          sso: { providerId: 'oidc.demo', domain: 'customer.example' },
+        },
+      },
+      { new: true },
+    ).select('+publicDemo'))!;
+    env.PUBLIC_DEMO_TENANT_ID = String(tac._id);
+    await UserModel.updateOne(
+      { email: 'sysadmin@dev.local', tenantId: tac._id },
+      { $set: { publicDemo: true } },
+    );
+
+    const hidden = await request(app)
+      .get('/api/v1/auth/sso/lookup')
+      .query({ email: 'person@customer.example' });
+    expect(hidden.body.data).toEqual({ providerId: null, tenant: null });
+    const notJitIntoDemo = await bearer('uid:demo-domain-user:person@customer.example:mfa:oidc.demo');
+    expect(notJitIntoDemo.status).toBe(201);
+    expect(notJitIntoDemo.body.data.tenant.slug).toBe('public');
+    expect(String((await UserModel.findOne({ firebaseUid: 'demo-domain-user' }).lean())?.tenantId))
+      .not.toBe(String(tac._id));
+
+    const acme = (await TenantModel.findOne({ slug: 'acme' }))!;
+    await UserModel.create({
+      firebaseUid: 'dev:acme-sysadmin@ops.example',
+      email: 'acme-sysadmin@ops.example',
+      name: 'Acme System Administrator',
+      role: 'system_administrator',
+      tenantId: acme._id,
+      mfaEnrolled: true,
+    });
+    const acmeSystemAdmin = await login('acme-sysadmin@ops.example');
+    const claimed = await request(app)
+      .patch('/api/v1/system/tenant')
+      .set(acmeSystemAdmin)
+      .send({
+        sso: { providerId: 'oidc.customer', domain: 'customer.example' },
+        features: { sso: true },
+      });
+    expect(claimed.status, JSON.stringify(claimed.body)).toBe(200);
+    const discovered = await request(app)
+      .get('/api/v1/auth/sso/lookup')
+      .query({ email: 'new@customer.example' });
+    expect(discovered.body.data).toEqual({ providerId: 'oidc.customer', tenant: 'Acme Financial (PAID demo)' });
+    const ordinaryJit = await bearer('uid:customer-user:new@customer.example:mfa:oidc.customer');
+    expect(ordinaryJit.status).toBe(201);
+    expect(ordinaryJit.body.data.tenant.slug).toBe('acme');
+
+    const demoLogin = await request(app)
+      .post('/api/v1/auth/public-demo/session')
+      .send({ role: 'system_administrator' });
+    expect(demoLogin.status).toBe(201);
+    const demoHeaders = { 'X-Session-Id': demoLogin.body.data.sessionId as string };
+    const unsafeDomain = await request(app)
+      .patch('/api/v1/system/tenant')
+      .set(demoHeaders)
+      .send({ sso: { providerId: 'oidc.demo', domain: 'another-customer.example' } });
+    expect(unsafeDomain.status).toBe(400);
+    const reservedDomain = await request(app)
+      .patch('/api/v1/system/tenant')
+      .set(demoHeaders)
+      .send({
+        sso: { providerId: 'oidc.demo', domain: 'sandbox.invalid' },
+        features: { sso: true },
+      });
+    expect(reservedDomain.status, JSON.stringify(reservedDomain.body)).toBe(200);
+    const reservedHidden = await request(app)
+      .get('/api/v1/auth/sso/lookup')
+      .query({ email: 'person@sandbox.invalid' });
+    expect(reservedHidden.body.data).toEqual({ providerId: null, tenant: null });
   });
 
   it('system administrators configure SSO and policies for their tenant; changes are audited [FR-03, FR-25, SEC-02]', async () => {

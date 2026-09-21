@@ -8,7 +8,7 @@ import { assertRoleAllowedForPlan } from '../modules/users/plan-policy';
 import { usersService } from '../modules/users/service';
 import { allowsNonProductionDemoShortcut } from '../modules/auth/policy';
 import { SessionModel } from '../modules/auth/model';
-import { isPublicDemoAccount, isPublicDemoEligible } from '../modules/auth/public-demo';
+import { isPublicDemoAccount, isPublicDemoEligible, isPublicDemoSandboxEmail } from '../modules/auth/public-demo';
 import { TenantModel, type TenantFeatures, type TenantPlan } from '../modules/tenants/model';
 
 export interface AuthUser {
@@ -58,7 +58,7 @@ export const authenticate: RequestHandler = async (req, _res, next) => {
     verifiedUid = token.uid;
     tokenMfa = token.mfa;
     signInProvider = token.signInProvider;
-    user = await UserModel.findOne({ firebaseUid: token.uid }).select('+publicDemo').lean();
+    user = await UserModel.findOne({ firebaseUid: token.uid }).select('+publicDemo +publicDemoSandboxOnly').lean();
     if (!user) {
       if (!token.email) throw new AppError('UNAUTHENTICATED', 'Identity has no email');
       const created = await usersService.provisionSelfSignup({
@@ -71,7 +71,7 @@ export const authenticate: RequestHandler = async (req, _res, next) => {
       user = created.toObject();
     }
   } else if (devUser && env.AUTH_DEV_BYPASS && !isProd) {
-    user = await UserModel.findOne({ email: devUser.toLowerCase() }).select('+publicDemo').lean();
+    user = await UserModel.findOne({ email: devUser.toLowerCase() }).select('+publicDemo +publicDemoSandboxOnly').lean();
   } else {
     const sessionId = req.header('x-session-id');
     const publicDemoSession = sessionId
@@ -82,11 +82,14 @@ export const authenticate: RequestHandler = async (req, _res, next) => {
         }).select('userId').lean()
       : null;
     if (!publicDemoSession) throw new AppError('UNAUTHENTICATED', 'Missing bearer token');
-    user = await UserModel.findById(publicDemoSession.userId).select('+publicDemo').lean();
+    user = await UserModel.findById(publicDemoSession.userId).select('+publicDemo +publicDemoSandboxOnly').lean();
     trustedPublicDemoFlow = true;
   }
 
   if (!user) throw new AppError('UNAUTHENTICATED', 'User is not provisioned');
+  if (!trustedPublicDemoFlow && (user.publicDemoSandboxOnly || isPublicDemoSandboxEmail(user.email))) {
+    throw new AppError('FORBIDDEN', 'This identity is confined to the public demo sandbox');
+  }
   // A disabled identity cannot keep using (or refreshing) an application session. Treat it as an
   // invalid session so every client follows the same secure sign-out path.
   if (user.status !== 'active') throw new AppError('SESSION_INVALID', 'Account is disabled');

@@ -19,6 +19,8 @@ import { QuestionModel } from '../questions/model';
 import { RuleModel } from '../rules/model';
 import { ScoringMatrixModel } from '../scoring/model';
 import { DatasetModel } from '../datasets/model';
+import { env } from '../../config/env';
+import { isPublicDemoTenant, isReservedInvalidDomain } from '../auth/public-demo';
 
 /** System administrator (Bayshore) — tenant configuration. All changes are audited as config changes (FR-25). */
 export const systemRouter = Router();
@@ -29,11 +31,23 @@ systemRouter.get('/users', async (req, res) => {
 });
 
 systemRouter.post('/users', validate({ body: SystemUserCreate }), async (req, res) => {
-  ok(res, await directoryService.createUser(req.user!.tenantId, req.body as SystemUserCreate, req.user!), 201);
+  ok(res, await directoryService.createUser(
+    req.user!.tenantId,
+    req.body as SystemUserCreate,
+    req.user!,
+    { publicDemoSandbox: req.accessMode === 'public_demo_sandbox' },
+  ), 201);
 });
 
 systemRouter.patch('/users/:id', validate({ params: SystemIdParams, body: SystemUserPatch }), async (req, res) => {
-  ok(res, await directoryService.updateUser(req.user!.tenantId, String(req.params.id), req.body as SystemUserPatch, req.user!));
+  const body = req.body as SystemUserPatch;
+  ok(res, await directoryService.updateUser(
+    req.user!.tenantId,
+    String(req.params.id),
+    body,
+    req.user!,
+    { protectPublicDemoAnchors: req.accessMode === 'public_demo_sandbox' },
+  ));
 });
 
 systemRouter.get('/departments', async (req, res) => {
@@ -153,10 +167,27 @@ systemRouter.get('/tenant', async (req, res) => {
  */
 systemRouter.patch('/tenant', validate({ body: TenantPatch }), async (req, res) => {
   const body = req.body as TenantPatch;
+  if (req.accessMode === 'public_demo_sandbox' && body.plan !== undefined && body.plan !== 'paid') {
+    throw new AppError('FORBIDDEN', 'The public demo tenant must remain on its configured PAID plan');
+  }
   const after = await withMongoTransaction(async () => {
-    const t = await TenantModel.findById(req.user!.tenantId);
+    const t = await TenantModel.findById(req.user!.tenantId).select('+publicDemo');
     if (!t) throw new AppError('NOT_FOUND', 'tenant');
     const before = view(t);
+    const publicDemoTenant = isPublicDemoTenant({
+      configuredTenantId: env.PUBLIC_DEMO_TENANT_ID,
+      tenant: { id: String(t._id), slug: t.slug, publicDemo: t.publicDemo },
+    });
+    if (publicDemoTenant && body.sso?.domain && !isReservedInvalidDomain(body.sso.domain)) {
+      throw new AppError('VALIDATION_ERROR', 'The public demo tenant may use only a reserved .invalid SSO domain');
+    }
+    if (
+      publicDemoTenant &&
+      body.features?.sso === true &&
+      !isReservedInvalidDomain(body.sso?.domain ?? t.sso?.domain ?? '')
+    ) {
+      throw new AppError('VALIDATION_ERROR', 'The public demo tenant may enable SSO only with a reserved .invalid domain');
+    }
     if (body.plan === 'free' && t.plan !== 'free') {
       const managedAccount = await UserModel.exists({ tenantId: t._id, role: { $ne: 'requestor' } });
       if (managedAccount) throw new AppError('CONFLICT', 'Remove or convert managed-role accounts before changing this tenant to FREE');
@@ -191,7 +222,12 @@ systemRouter.patch('/tenant', validate({ body: TenantPatch }), async (req, res) 
     if (body.features) Object.assign(t.features, body.features);
     if (body.sso) {
       if (body.sso.domain) {
-        const clash = await TenantModel.findOne({ _id: { $ne: t._id }, 'sso.domain': body.sso.domain.toLowerCase() }).lean();
+        const excludedTenantIds = [t._id, ...(env.PUBLIC_DEMO_TENANT_ID ? [env.PUBLIC_DEMO_TENANT_ID] : [])];
+        const clash = await TenantModel.findOne({
+          _id: { $nin: excludedTenantIds },
+          publicDemo: { $ne: true },
+          'sso.domain': body.sso.domain.toLowerCase(),
+        }).lean();
         if (clash) throw new AppError('CONFLICT', `domain ${body.sso.domain} is already claimed by another tenant`);
       }
       t.set('sso', { providerId: body.sso.providerId ?? undefined, domain: body.sso.domain?.toLowerCase() ?? undefined });

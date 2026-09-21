@@ -4,10 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { app, login, seeded } from '../../tests/helpers';
 import { GENESIS_HASH } from '../../lib/hash';
 import { AuditLogModel } from './model';
-import { audit } from './service';
+import { audit, sessionAuditReference } from './service';
 import { AuditArchiveManifestModel } from './archive.model';
 import { TenantModel } from '../tenants/model';
 import { UserModel } from '../users/model';
+import { SessionModel } from '../auth/model';
 
 describe('audit hash chain', () => {
   let tenantId: string;
@@ -110,6 +111,26 @@ describe('audit hash chain', () => {
     expect((await audit.verify(String(acme._id))).ok).toBe(true);
     const listed = await request(app).get('/api/v1/audit-logs/archive-manifests').set(sysadmin);
     expect(listed.body.data).toHaveLength(1);
+  });
+
+  it('redacts historical bearer-equivalent session ids from standard audit archives [SEC-02, SEC-07]', async () => {
+    const acme = (await TenantModel.findOne({ slug: 'acme' }))!;
+    await UserModel.updateOne({ email: 'sysadmin@dev.local' }, { $set: { tenantId: acme._id } });
+    const sysadmin = await login('sysadmin@dev.local');
+    const session = (await SessionModel.findOne({ sessionId: sysadmin['X-Session-Id'] }))!;
+    await AuditLogModel.collection.updateOne(
+      { tenantId: acme._id, action: 'session.created' },
+      { $set: { 'entity.id': session.sessionId } },
+    );
+
+    const exported = await request(app).post('/api/v1/audit-logs/archive').set(sysadmin).send({
+      from: new Date(Date.now() - 60_000).toISOString(),
+      to: new Date(Date.now() + 60_000).toISOString(),
+    });
+    expect(exported.status).toBe(201);
+    const serialized = JSON.stringify(exported.body.data.records);
+    expect(serialized).not.toContain(session.sessionId);
+    expect(serialized).toContain(sessionAuditReference(session.sessionId));
   });
 
   it('rolls back an archive manifest when its audit evidence fails [FR-25, SEC-06, SEC-07]', async () => {
