@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { envSchema } from './env';
+import { envSchema, mailDeliveryStatus } from './env';
 
 const production = {
   NODE_ENV: 'production',
@@ -81,6 +81,25 @@ describe('production environment guardrails [FR-01, FR-08, SEC-03, SEC-04]', () 
     expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.error.issues.map((issue) => issue.path.join('.'))).toContain('MAIL_FROM');
+  });
+
+  it('allows an explicit demo-only startup override without making sandbox delivery valid [FR-01, SEC-03, NFR-05]', () => {
+    const result = envSchema.safeParse({
+      ...production,
+      AI_PROVIDER: 'openai',
+      OPENAI_API_KEY: 'test-key',
+      MAIL_PROVIDER: 'resend',
+      MAIL_FROM: 'RiskSense AI <onboarding@resend.dev>',
+      RESEND_API_KEY: 'test-resend-key',
+      SMTP_URL: undefined,
+      ALLOW_RESEND_SANDBOX_STARTUP: 'true',
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.ALLOW_RESEND_SANDBOX_STARTUP).toBe(true);
+    expect(mailDeliveryStatus(result.data.MAIL_PROVIDER, result.data.MAIL_FROM, true)).toBe(
+      'blocked_sandbox_sender',
+    );
   });
 
   it('requires a nonblank 16+ character nightly-job credential in production [SEC-06, SEC-07]', () => {

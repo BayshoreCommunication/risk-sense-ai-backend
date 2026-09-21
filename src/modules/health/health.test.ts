@@ -1,6 +1,7 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { app } from '../../tests/helpers';
+import { aggregateHealthStatus } from './routes';
 
 describe('GET /api/v1/health', () => {
   it('reports db connected and returns the envelope [NFR-05]', async () => {
@@ -16,5 +17,12 @@ describe('GET /api/v1/health', () => {
     const res = await request(app).get('/api/v1/nope');
     expect(res.status).toBe(404);
     expect(res.body.error.code).toBe('NOT_FOUND');
+  });
+
+  it('reports aggregate health as degraded when production OTP delivery is blocked [NFR-05, SEC-03]', () => {
+    expect(aggregateHealthStatus('connected', 'blocked_sandbox_sender')).toEqual({
+      status: 'degraded',
+      statusCode: 503,
+    });
   });
 });

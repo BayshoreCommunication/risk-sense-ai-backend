@@ -1,4 +1,4 @@
-import { env, isProd } from '../config/env';
+import { env, isProd, mailDeliveryStatus } from '../config/env';
 import { AppError } from './errors';
 import { logger } from './logger';
 
@@ -20,7 +20,7 @@ export function resolveResendRecipient(
 ): string {
   const isSandboxSender = /onboarding@resend\.dev\b/i.test(sender);
   if (!isSandboxSender) return recipient;
-  if (production) {
+  if (mailDeliveryStatus('resend', sender, production) === 'blocked_sandbox_sender') {
     throw new AppError('MAIL_SEND_FAILED', 'Resend sandbox sender is forbidden in production');
   }
   return recipient === 'coderaise247@gmail.com' ? recipient : 'coderaise247@gmail.com';

@@ -181,19 +181,21 @@ describe('email OTP second factor', () => {
     expect(afterQuota.body.error.code).toBe('OTP_RATE_LIMITED');
   });
 
-  it('stores no code or cooldown when email delivery rejects, then permits a retry [FR-01]', async () => {
+  it('stores no OTP, audit, or cooldown across repeated mail failures [FR-01, SEC-03]', async () => {
     const h = bearer('u1', 'one@x.com');
-    sendMailMock.mockRejectedValueOnce(new AppError('MAIL_SEND_FAILED', 'Email could not be sent'));
+    sendMailMock.mockRejectedValue(new AppError('MAIL_SEND_FAILED', 'Email could not be sent'));
 
-    const failed = await request(app).post('/api/v1/auth/otp/request').set(h);
-    expect(failed.status).toBe(502);
-    expect(failed.body.error.code).toBe('MAIL_SEND_FAILED');
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const failed = await request(app).post('/api/v1/auth/otp/request').set(h);
+      expect(failed.status).toBe(502);
+      expect(failed.body.error.code).toBe('MAIL_SEND_FAILED');
+      expect(failed.body).not.toHaveProperty('data');
+      expect(JSON.stringify(failed.body)).not.toContain('devCode');
+    }
+
     expect(await OtpCodeModel.countDocuments({ sentTo: 'one@x.com' })).toBe(0);
+    expect(await AuditLogModel.countDocuments({ action: 'auth.otp_sent' })).toBe(0);
     expect(await OtpIssueLockModel.countDocuments()).toBe(0);
-
-    const retry = await requestCode(h);
-    expect(retry.devCode).toMatch(/^\d{6}$/);
-    expect(await OtpCodeModel.countDocuments({ sentTo: 'one@x.com' })).toBe(1);
   });
 
   it('rolls back OTP replacement when otp_sent audit fails, then retries cleanly [FR-01, SEC-03, SEC-07]', async () => {

@@ -1172,7 +1172,11 @@
                       "type": "object",
                       "properties": {
                         "status": {
-                          "type": "string"
+                          "type": "string",
+                          "enum": [
+                            "ok",
+                            "degraded"
+                          ]
                         },
                         "db": {
                           "type": "string"
@@ -1185,6 +1189,13 @@
                         },
                         "mail": {
                           "type": "string"
+                        },
+                        "otpDelivery": {
+                          "type": "string",
+                          "enum": [
+                            "available",
+                            "blocked_sandbox_sender"
+                          ]
                         },
                         "version": {
                           "type": "string"
@@ -1199,6 +1210,81 @@
                         "openai",
                         "auth",
                         "mail",
+                        "otpDelivery",
+                        "version",
+                        "uptimeSec"
+                      ]
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service is alive but a required dependency or production OTP delivery is degraded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "ok",
+                            "degraded"
+                          ]
+                        },
+                        "db": {
+                          "type": "string"
+                        },
+                        "openai": {
+                          "type": "string"
+                        },
+                        "auth": {
+                          "type": "string"
+                        },
+                        "mail": {
+                          "type": "string"
+                        },
+                        "otpDelivery": {
+                          "type": "string",
+                          "enum": [
+                            "available",
+                            "blocked_sandbox_sender"
+                          ]
+                        },
+                        "version": {
+                          "type": "string"
+                        },
+                        "uptimeSec": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "db",
+                        "openai",
+                        "auth",
+                        "mail",
+                        "otpDelivery",
                         "version",
                         "uptimeSec"
                       ]

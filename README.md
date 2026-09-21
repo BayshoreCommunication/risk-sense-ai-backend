@@ -59,6 +59,12 @@ Distinct ambiguous identities fail closed. Verify the configured
 Firebase project, Mongo URI, and tenant id before running it; the Mongo deployment must support
 transactions.
 
+Production still rejects Resend's `onboarding@resend.dev` sender by default. For an explicitly
+approved demo-only deployment, `ALLOW_RESEND_SANDBOX_STARTUP=true` permits non-mail routes to start
+while every production OTP request remains blocked before provider delivery or persistence. In that
+mode aggregate health is HTTP 503/degraded; liveness and database readiness remain independent. It
+is not a substitute for a verified sender and must not be described as general production readiness.
+
 ## Verification
 
 ```bash

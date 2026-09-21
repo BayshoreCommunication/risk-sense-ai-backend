@@ -1,6 +1,19 @@
 import 'dotenv/config';
 import { z } from 'zod';
 
+export type MailDeliveryStatus = 'available' | 'blocked_sandbox_sender';
+
+/** A sandbox Resend identity is never an acceptable production OTP transport. */
+export function mailDeliveryStatus(
+  provider: 'console' | 'resend' | 'smtp',
+  sender: string,
+  production: boolean,
+): MailDeliveryStatus {
+  return production && provider === 'resend' && /onboarding@resend\.dev\b/i.test(sender)
+    ? 'blocked_sandbox_sender'
+    : 'available';
+}
+
 /**
  * Environment is validated once at boot. A missing/invalid value fails fast with a readable
  * message instead of a confusing runtime error later (see DevelopmentGuide.md).
@@ -38,6 +51,12 @@ export const envSchema = z
     MAIL_FROM: z.string().default('RiskSense AI <no-reply@risksense.local>'),
     RESEND_API_KEY: z.string().optional(),
     SMTP_URL: z.string().optional(),
+    // Emergency demo-only availability switch. It never enables sandbox delivery: mailer.ts still
+    // rejects every production OTP before a provider request or OTP row is created.
+    ALLOW_RESEND_SANDBOX_STARTUP: z
+      .string()
+      .optional()
+      .transform((v) => v === 'true' || v === '1'),
 
     CORS_ORIGINS: z.string().default('http://localhost:3000'),
     // Optional long-lived-host scheduler. On Vercel this stays off and vercel.json calls the
@@ -96,7 +115,10 @@ export const envSchema = z
       if (v.MAIL_PROVIDER === 'resend' && !v.RESEND_API_KEY?.trim()) {
         ctx.addIssue({ code: 'custom', path: ['RESEND_API_KEY'], message: 'required when MAIL_PROVIDER=resend in production' });
       }
-      if (v.MAIL_PROVIDER === 'resend' && /onboarding@resend\.dev\b/i.test(v.MAIL_FROM)) {
+      if (
+        mailDeliveryStatus(v.MAIL_PROVIDER, v.MAIL_FROM, true) === 'blocked_sandbox_sender' &&
+        !v.ALLOW_RESEND_SANDBOX_STARTUP
+      ) {
         ctx.addIssue({ code: 'custom', path: ['MAIL_FROM'], message: 'Resend sandbox sender is forbidden in production' });
       }
       if (v.MAIL_PROVIDER === 'smtp' && !v.SMTP_URL?.trim()) {

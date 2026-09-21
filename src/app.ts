@@ -4,7 +4,7 @@ import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import { randomUUID } from 'node:crypto';
 import pinoHttp from 'pino-http';
-import { env, isTest } from './config/env';
+import { env, isProd, isTest, mailDeliveryStatus } from './config/env';
 import { logger } from './lib/logger';
 import { errorHandler, notFoundHandler } from './middleware/error';
 import { assessmentsRouter } from './modules/assessments/routes';
@@ -33,6 +33,13 @@ import { createMongoRateLimitStore } from './modules/rate-limits/store';
 export const globalRateLimitKey = (req: { ip?: string }) => req.ip ?? 'anonymous';
 
 export function createApp() {
+  const otpDelivery = mailDeliveryStatus(env.MAIL_PROVIDER, env.MAIL_FROM, isProd);
+  if (!isTest && otpDelivery !== 'available') {
+    logger.warn(
+      { mailProvider: env.MAIL_PROVIDER, otpDelivery },
+      'OTP delivery is unavailable; production is running in explicit demo-only degraded mode',
+    );
+  }
   const app = express();
 
   app.set('trust proxy', 1); // The deployment proxy forwards the client address used by rate limiting.

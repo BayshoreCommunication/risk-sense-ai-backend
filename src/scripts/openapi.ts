@@ -79,6 +79,17 @@ const NightlySummary = z.object({
   brokenChains: z.array(z.string()),
 });
 
+const HealthBody = z.object({
+  status: z.enum(['ok', 'degraded']),
+  db: z.string(),
+  openai: z.string(),
+  auth: z.string(),
+  mail: z.string(),
+  otpDelivery: z.enum(['available', 'blocked_sandbox_sender']),
+  version: z.string(),
+  uptimeSec: z.number(),
+});
+
 registry.registerPath({
   method: 'get',
   path: '/health',
@@ -87,9 +98,13 @@ registry.registerPath({
       description: 'Service health',
       content: {
         'application/json': {
-          schema: Envelope(z.object({ status: z.string(), db: z.string(), openai: z.string(), auth: z.string(), mail: z.string(), version: z.string(), uptimeSec: z.number() })),
+          schema: Envelope(HealthBody),
         },
       },
+    },
+    503: {
+      description: 'Service is alive but a required dependency or production OTP delivery is degraded',
+      content: { 'application/json': { schema: Envelope(HealthBody) } },
     },
   },
 });
