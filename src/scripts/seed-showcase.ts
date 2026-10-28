@@ -14,8 +14,7 @@
  * Refuses to run in production.
  */
 import mongoose from 'mongoose';
-import { env } from '../config/env';
-import { connectDb } from '../lib/db';
+import { assertDevelopmentDatabase, connectDb } from '../lib/db';
 import { AssessmentMessageModel, AssessmentModel } from '../modules/assessments/model';
 import { audit } from '../modules/audit/service';
 import { AuditLogModel } from '../modules/audit/model';
@@ -327,7 +326,7 @@ async function buildHistory(tenantId: mongoose.Types.ObjectId, requestorIds: mon
 }
 
 export async function seedShowcase() {
-  if (env.NODE_ENV === 'production') throw new Error('seed:showcase must never run against production');
+  assertDevelopmentDatabase('seed:showcase');
 
   // 1. Wipe everything operational. Content and tenants survive.
   const wiped: Record<string, number> = {};

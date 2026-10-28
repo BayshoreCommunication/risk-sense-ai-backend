@@ -70,6 +70,25 @@ export async function connectDb(uri: string = env.MONGODB_URI): Promise<typeof m
   return mongoose;
 }
 
+const DEVELOPMENT_DATABASE = /_(?:dev|test)$/; // a bare `test` is also what a URI without a database path selects
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+
+/**
+ * Seeders that wipe or fabricate data may only touch a development database. NODE_ENV alone is not
+ * enough: a developer `.env` can point at the production cluster with NODE_ENV=development, and the
+ * free production tier has no backups (Decision 83, FR-24).
+ */
+export function assertDevelopmentDatabase(
+  script: string,
+  target: { name: string; host: string } = { name: mongoose.connection.name, host: mongoose.connection.host },
+): void {
+  if (env.NODE_ENV === 'production') throw new Error(`${script} must never run in production`);
+  if (LOCAL_HOSTS.has(target.host) || DEVELOPMENT_DATABASE.test(target.name)) return;
+  throw new Error(
+    `${script} refuses database "${target.name}" on ${target.host}: only a local database or one named *_dev / *_test is allowed`,
+  );
+}
+
 export async function disconnectDb(): Promise<void> {
   if (mongoose.connection.readyState !== 0) await mongoose.disconnect();
 }
