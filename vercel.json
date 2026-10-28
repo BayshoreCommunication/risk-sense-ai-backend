@@ -3,7 +3,7 @@
   "framework": null,
   "buildCommand": null,
   "outputDirectory": null,
-  "regions": ["bom1"],
+  "regions": ["iad1"],
   "rewrites": [{ "source": "/(.*)", "destination": "/api" }],
   "functions": {
     "api/index.ts": {
