@@ -58,7 +58,7 @@ describe('escalation targets and mandatory review [T-061, AI-03, DASH-04]', () =
     const devUser = (await UserModel.findOne({ email: 'requestor@dev.local' }))!;
     const free = await AssessmentModel.create({ tenantId: devUser.tenantId, requestorId: devUser._id, status: 'awaiting_decision', phase: 'done', result: { score: 30, classification: 'risk', computedClassification: 'risk', confidence: 80, ruleDriven: false, professionalConsult: false, mandatoryReview: false, explanation: 'x', recommendedAction: 'Manage the Risk', computedAt: new Date() } });
     expect((await request(app).get(`/api/v1/assessments/${free._id}/escalation-targets`).set(dev)).body.data).toEqual([]);
-    const routed = await request(app).post(`/api/v1/assessments/${free._id}/decision`).set(dev).send({ type: 'escalate', escalateToUserId: colleagueId });
+    const routed = await request(app).post(`/api/v1/assessments/${free._id}/decision`).set(dev).send({ type: 'escalate', escalateToUserId: colleagueId, reason: 'Needs another reviewer' });
     expect(routed.status).toBe(403);
     expect(routed.body.error.code).toBe('FEATURE_DISABLED');
   });
@@ -70,18 +70,23 @@ describe('escalation targets and mandatory review [T-061, AI-03, DASH-04]', () =
     const post = (h: Record<string, string>, body: unknown) => request(app).post(`/api/v1/assessments/${id}/decision`).set(h).send(body);
 
     expect((await post(finReq, { type: 'accept', escalateToUserId: colleagueId })).status).toBe(400); // only escalations name a reviewer
-    const bad = await post(finReq, { type: 'escalate', escalateToUserId: itLeadId }); // IT lead: other department, no cross access
+    expect((await post(finReq, { type: 'escalate', escalateToUserId: colleagueId })).status).toBe(400); // escalation reason is required
+    const bad = await post(finReq, { type: 'escalate', escalateToUserId: itLeadId, reason: 'Needs specialist review' }); // IT lead: other department, no cross access
     expect(bad.status).toBe(400);
     expect(bad.body.error.code).toBe('VALIDATION_ERROR');
 
     const esc = await post(finReq, { type: 'escalate', escalateToUserId: crossId, reason: 'Needs treasury sign-off' });
     expect(esc.status).toBe(200);
-    expect(esc.body.data).toMatchObject({ status: 'escalated', escalatedTo: { _id: crossId, name: 'Cross Reviewer' } });
+    expect(esc.body.data).toMatchObject({
+      status: 'escalated',
+      decision: { byUserId: String(finId), byUser: { _id: String(finId), name: 'Acme Finance Requestor' } },
+      escalatedTo: { _id: crossId, name: 'Cross Reviewer' },
+    });
     const audit = await AuditLogModel.findOne({ action: 'decision.recorded', 'entity.id': id }).lean();
     expect(audit!.payload).toMatchObject({ type: 'escalate', escalatedToUserId: crossId });
 
     // Re-route to the Finance colleague (still escalated) — the colleague is not in cross's reach but is in the requestor's.
-    const re = await post(finReq, { type: 'escalate', escalateToUserId: colleagueId });
+    const re = await post(finReq, { type: 'escalate', escalateToUserId: colleagueId, reason: 'Finance colleague must review' });
     expect(re.body.data.escalatedTo.name).toBe('Acme Finance Colleague');
 
     // The colleague sees it in their list (department scope) and under escalatedToMe; the transcript names them.
@@ -106,7 +111,7 @@ describe('escalation targets and mandatory review [T-061, AI-03, DASH-04]', () =
     const finId = (await UserModel.findOne({ email: 'requestor@paid.local' }))!._id;
     const a = await awaiting(finId, finance);
     const id = String(a._id);
-    expect((await request(app).post(`/api/v1/assessments/${id}/decision`).set(finReq).send({ type: 'escalate', escalateToUserId: itLeadId })).status).toBe(200);
+    expect((await request(app).post(`/api/v1/assessments/${id}/decision`).set(finReq).send({ type: 'escalate', escalateToUserId: itLeadId, reason: 'Needs information security review' })).status).toBe(200);
     await UserModel.updateOne({ _id: itLeadId }, { crossDepartmentAccess: false });
     const it = await login('itlead@paid.local');
     expect((await request(app).get(`/api/v1/assessments/${id}`).set(it)).status).toBe(200);

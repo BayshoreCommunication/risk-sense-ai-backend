@@ -858,7 +858,10 @@ export const assessmentsService = {
 
   async view(doc: Doc) {
     const o = doc.toObject();
-    const escalatedTo = o.escalatedToUserId ? await UserModel.findById(o.escalatedToUserId).select('name').lean() : null;
+    const [escalatedTo, decidedBy] = await Promise.all([
+      o.escalatedToUserId ? UserModel.findOne({ _id: o.escalatedToUserId, tenantId: o.tenantId }).select('name').lean() : null,
+      o.decision?.byUserId ? UserModel.findOne({ _id: o.decision.byUserId, tenantId: o.tenantId }).select('name').lean() : null,
+    ]);
     return {
       _id: String(o._id),
       status: o.status,
@@ -875,7 +878,13 @@ export const assessmentsService = {
       answers: o.answers,
       facts: o.facts,
       result: o.result?.computedAt ? o.result : null,
-      decision: o.decision?.type ? o.decision : null,
+      decision: o.decision?.type
+        ? {
+            ...o.decision,
+            byUserId: o.decision.byUserId ? String(o.decision.byUserId) : undefined,
+            byUser: decidedBy ? { _id: String(decidedBy._id), name: decidedBy.name } : null,
+          }
+        : null,
       escalatedTo: escalatedTo ? { _id: String(escalatedTo._id), name: escalatedTo.name } : null,
       timing: o.timing,
       versions: o.versions,
