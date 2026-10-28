@@ -5,8 +5,7 @@
  * Never run against production (env guard below).
  */
 import mongoose from 'mongoose';
-import { connectDb } from '../lib/db';
-import { env } from '../config/env';
+import { assertDevelopmentDatabase, connectDb } from '../lib/db';
 import { AssessmentModel } from '../modules/assessments/model';
 import { CLASSIFICATIONS } from '../modules/shared/enums';
 import { DepartmentModel, TenantModel } from '../modules/tenants/model';
@@ -26,7 +25,7 @@ function rnd(seed: number) {
 }
 
 export async function seedDemo(count = 900) {
-  if (env.NODE_ENV === 'production') throw new Error('seed:demo must never run in production');
+  assertDevelopmentDatabase('seed:demo');
   const acme = await TenantModel.findOne({ slug: 'acme' });
   if (!acme) throw new Error('run npm run seed first');
   const existing = await AssessmentModel.countDocuments({ tenantId: acme._id, 'versions.aiProvider': 'demo' });
