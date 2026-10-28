@@ -35,6 +35,9 @@ export const DecisionBody = z
       if (!d.reason || d.reason.trim().length < 25) ctx.addIssue({ code: 'custom', path: ['reason'], message: 'an override needs a documented reason of at least 25 characters (FR-23)' });
       if (!d.overriddenTo) ctx.addIssue({ code: 'custom', path: ['overriddenTo'], message: 'an override must state the new classification' });
     }
+    if (d.type === 'escalate' && (!d.reason || d.reason.trim().length < 10)) {
+      ctx.addIssue({ code: 'custom', path: ['reason'], message: 'an escalation needs a documented reason of at least 10 characters (T-061)' });
+    }
     if (d.type !== 'escalate' && d.escalateToUserId) ctx.addIssue({ code: 'custom', path: ['escalateToUserId'], message: 'only an escalation can name a reviewer' });
   });
 export type DecisionBody = z.infer<typeof DecisionBody>;
