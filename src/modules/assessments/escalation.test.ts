@@ -123,7 +123,8 @@ describe('escalation targets and mandatory review [T-061, AI-03, DASH-04]', () =
   });
 
   it('mandatoryReview=true lists only flagged assessments, tenant-wide for administrators [AI-03]', async () => {
-    const finId = (await UserModel.findOne({ email: 'requestor@paid.local' }))!._id;
+    const requestor = (await UserModel.findOne({ email: 'requestor@paid.local' }))!;
+    const finId = requestor._id;
     await awaiting(finId, finance); // flagged (confidence 35)
     await awaiting(finId, finance, { result: { score: 60, classification: 'elevated_risk', computedClassification: 'elevated_risk', confidence: 90, ruleDriven: false, professionalConsult: false, mandatoryReview: false, explanation: 'ok', recommendedAction: 'Manage the Risk', computedAt: new Date() } });
     await awaiting(finId, finance, { status: 'closed', decision: { type: 'accept', byUserId: finId, decidedAt: new Date() } }); // flagged but already decided
@@ -136,6 +137,9 @@ describe('escalation targets and mandatory review [T-061, AI-03, DASH-04]', () =
     const admin = await login('admin@dev.local');
     expect((await request(app).get('/api/v1/assessments').set(admin).query({ mandatoryReview: 'true' })).body.data.total).toBe(0);
     const acmeAdmin = await login('admin@paid.local');
-    expect((await request(app).get('/api/v1/assessments').set(acmeAdmin).query({ mandatoryReview: 'true', pending: 'true' })).body.data.total).toBe(1);
+    const adminQueue = (await request(app).get('/api/v1/assessments').set(acmeAdmin).query({ mandatoryReview: 'true', pending: 'true' })).body.data;
+    expect(adminQueue.total).toBe(1);
+    expect(adminQueue.items[0].requestor.name).toBe(requestor.name);
+    expect(adminQueue.items[0].requestor.email).not.toBe(requestor.email);
   });
 });

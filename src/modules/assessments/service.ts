@@ -841,7 +841,14 @@ export const assessmentsService = {
           result: it.result?.computedAt ? it.result : null,
           decision: it.decision?.type ? it.decision : null,
         };
-        return privileged ? maskAssessmentView(row, it.sector) : row;
+        if (!privileged) return row;
+        const masked = maskAssessmentView(row, it.sector);
+        // AI-03: the mandatory-review queue is an operational hand-off. Administrators need the
+        // requestor's display name to follow up, while email and assessment prose remain masked.
+        if (q.mandatoryReview && masked.requestor && it.requestor?.name) {
+          masked.requestor = { ...masked.requestor, name: it.requestor.name };
+        }
+        return masked;
       }),
       total,
       page: q.page,
