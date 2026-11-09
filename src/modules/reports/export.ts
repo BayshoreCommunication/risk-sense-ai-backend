@@ -9,7 +9,11 @@ function cell(v: unknown, kind: string): string {
   return String(v);
 }
 
-const csvEscape = (s: string) => (/[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
+function csvEscape(s: string): string {
+  // OWASP CSV Injection mitigation: prefix formula trigger characters with a single quote unless purely numeric
+  const sanitized = /^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s) ? `'${s}` : s;
+  return /[",\n\r]/.test(sanitized) ? `"${sanitized.replace(/"/g, '""')}"` : sanitized;
+}
 
 export function toCsv(r: ReportResult): string {
   const head = r.columns.map((c) => csvEscape(c.label)).join(',');
