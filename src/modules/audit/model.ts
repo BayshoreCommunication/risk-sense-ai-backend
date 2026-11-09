@@ -28,6 +28,7 @@ const auditLogSchema = new Schema(
   { timestamps: { createdAt: true, updatedAt: false }, collection: 'auditLogs', versionKey: false },
 );
 auditLogSchema.index({ tenantId: 1, seq: 1 }, { unique: true });
+auditLogSchema.index({ tenantId: 1, 'entity.type': 1, 'entity.id': 1, seq: 1 });
 auditLogSchema.index({ 'entity.type': 1, 'entity.id': 1 });
 auditLogSchema.index({ tenantId: 1, category: 1, createdAt: -1 });
 

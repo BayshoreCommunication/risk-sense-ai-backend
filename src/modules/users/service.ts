@@ -1,5 +1,5 @@
 import { env } from '../../config/env';
-import { withMongoTransaction } from '../../lib/db';
+import { isMongoDuplicateKeyFor, withMongoTransaction } from '../../lib/db';
 import { AppError } from '../../lib/errors';
 import { audit } from '../audit/service';
 import { isPublicDemoSandboxEmail } from '../auth/public-demo';
@@ -41,31 +41,47 @@ export const usersService = {
       }
       // A pre-provisioned account is resolved by verified email, but the real uid is not linked yet.
       // Linking happens only after the required OTP/SSO checks succeed in POST /auth/session.
-      if (!existingByEmail.firebaseUid.startsWith('dev:')) {
+      if (!existingByEmail.firebaseUid.startsWith('dev:') && existingByEmail.firebaseUid !== input.firebaseUid) {
         throw new AppError('CONFLICT', 'Email is already linked to a different identity');
       }
       return existingByEmail;
     }
 
-    return withMongoTransaction(async () => {
-      const user = await UserModel.create({
-        firebaseUid: input.firebaseUid,
-        email,
-        name: input.name?.trim() || input.email.split('@')[0],
-        role: 'requestor',
-        tenantId: tenant._id,
-        mfaEnrolled: input.mfa,
+    try {
+      return await withMongoTransaction(async () => {
+        const user = await UserModel.create({
+          firebaseUid: input.firebaseUid,
+          email,
+          name: input.name?.trim() || input.email.split('@')[0],
+          role: 'requestor',
+          tenantId: tenant._id,
+          mfaEnrolled: input.mfa,
+        });
+        await audit.write({
+          tenantId: String(tenant._id),
+          category: 'auth',
+          action: 'auth.self_signup',
+          actor: { id: String(user._id), role: user.role },
+          entity: { type: 'user', id: String(user._id) },
+          payload: { email: user.email, tenant: tenant.slug, viaSso: Boolean(ssoTenant) },
+        });
+        return user;
       });
-      await audit.write({
-        tenantId: String(tenant._id),
-        category: 'auth',
-        action: 'auth.self_signup',
-        actor: { id: String(user._id), role: user.role },
-        entity: { type: 'user', id: String(user._id) },
-        payload: { email: user.email, tenant: tenant.slug, viaSso: Boolean(ssoTenant) },
-      });
-      return user;
-    });
+    } catch (error) {
+      if (isMongoDuplicateKeyFor(error, ['email']) || isMongoDuplicateKeyFor(error, ['firebaseUid'])) {
+        const recheck = await UserModel.findOne({ email }).select('+publicDemo +publicDemoSandboxOnly');
+        if (recheck) {
+          if (recheck.publicDemoSandboxOnly) {
+            throw new AppError('FORBIDDEN', 'This identity is confined to the public demo sandbox');
+          }
+          if (recheck.firebaseUid === input.firebaseUid || recheck.firebaseUid.startsWith('dev:')) {
+            return recheck;
+          }
+          throw new AppError('CONFLICT', 'Email is already linked to a different identity');
+        }
+      }
+      throw error;
+    }
   },
 
   /** Bind a pre-provisioned placeholder only after every login factor has passed. */
